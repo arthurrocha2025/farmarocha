@@ -11,7 +11,8 @@ Cruzamento da **LISTA DE COMPRA (controle)** com 4 cotações recebidas em 04/09
 
 ## Regras aplicadas
 
-1. **OL separado**: todo item com valor na coluna `OL` do controle sai da cotação e vai
+1. **OL separado**: todo item com valor na coluna `OL` do controle — e também itens Aché
+   identificados pelo prefixo GS1 7896658 nos EANs, já que o controle não os marca — sai da cotação e vai
    para um arquivo próprio por OL (`OL_*.xlsx`), sem preços de cotação.
 2. **Demais itens**: alocados ao distribuidor de **menor preço unitário equivalente**
    com estoque (ePan exige `Estoque = SIM`; Nazária exige estoque > 0).

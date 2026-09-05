@@ -53,6 +53,12 @@ for r in ws.iter_rows(min_row=2, values_only=True):
     d["_un"] = float(d.get("Un. compradas") or 0)
     ol = d.get("OL")
     d["_ol"] = str(ol).strip() if ol not in (None, "") else None
+    # Aché não vem marcada na coluna OL do controle, mas é OL: identifica pelo
+    # prefixo GS1 da Aché/Labofarma (7896658) em qualquer EAN do item.
+    if d["_ol"] is None:
+        eans_full = [str(d.get(k) or "") for k in ("EAN princ.", "EAN adic. 1", "EAN adic. 2", "EAN adic. 3")]
+        if any(e.startswith("7896658") for e in eans_full):
+            d["_ol"] = "ACHE"
     itens.append(d)
 
 # ---------------------------------------------------------------- ePan (por EAN)
