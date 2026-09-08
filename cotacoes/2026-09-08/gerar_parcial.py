@@ -13,11 +13,12 @@ from openpyxl.utils import get_column_letter
 UP = "/root/.claude/uploads/506daea3-7102-5cb6-9758-517151fad432/"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saida2")
 os.makedirs(OUT, exist_ok=True)
-FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA"]  # novos fornecedores entram aqui conforme chegarem
+FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA", "TAPAJOS"]  # novos entram aqui conforme chegarem
 FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
              ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)"),
              ("EPAN", "08/09/2026", "EAN (painel 16:38)"),
-             ("CENTROFARMA", "08/09/2026", "EAN (promo rede)")]
+             ("CENTROFARMA", "08/09/2026", "EAN (promo rede)"),
+             ("TAPAJOS", "08/09/2026", "Cód. interno (planilha RFQ)")]
 
 def digits(v):
     if v is None: return None
@@ -107,6 +108,18 @@ for i in range(1, wscf.nrows):
     rec = dict(cod=cod, prod=row[2], preco=float(preco), estoque=est)
     for k in keys(row[1]): centrofarma.setdefault(k, rec)
 
+# Tapajós (RFQ 08/09 preenchida; por cód. interno; linhas de EAN alternativo unificadas pelo menor VALOR)
+wbtj = openpyxl.load_workbook(UP+"cd1c3e05-TAPAJOS.xlsx", data_only=True)
+_tj = {}
+for r in wbtj["Cotacao"].iter_rows(min_row=2, values_only=True):
+    if r[0] is None: continue
+    v = r[8]
+    if isinstance(v, (int, float)) and v > 0:
+        _tj.setdefault(r[0], []).append(float(v))
+tapajos = {cod: dict(preco=min(vs), prod="", cod="",
+                     obs_extra="preços divergentes entre EANs (usado menor)" if len(set(vs)) > 1 else "")
+           for cod, vs in _tj.items()}
+
 def pack_candidates(nome, extra):
     cands = {1} | set(extra)
     for m in re.finditer(r"\((\d+)\s*X\s*\d+\)", str(nome), re.I): cands.add(int(m.group(1)))
@@ -150,6 +163,9 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     hit = next((centrofarma[k] for k in ks if k in centrofarma), None)
     if hit: add("CENTROFARMA", hit["preco"], hit["prod"], hit["cod"], (hit["estoque"] or 0) > 0,
                 "" if (hit["estoque"] or 0) > 0 else "sem estoque")
+    if d["Cód"] in tapajos:
+        tj = tapajos[d["Cód"]]
+        add("TAPAJOS", tj["preco"], "", "", True, tj["obs_extra"])
     eleg = sorted([(v["pun"], f) for f, v in q.items() if v["eleg"]])
     win = eleg[0][1] if eleg else None
     if win:
