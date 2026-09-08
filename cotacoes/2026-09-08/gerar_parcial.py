@@ -13,12 +13,13 @@ from openpyxl.utils import get_column_letter
 UP = "/root/.claude/uploads/506daea3-7102-5cb6-9758-517151fad432/"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saida2")
 os.makedirs(OUT, exist_ok=True)
-FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA", "TAPAJOS"]  # novos entram aqui conforme chegarem
+FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA", "TAPAJOS", "NAZARIA"]  # novos entram conforme chegarem
 FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
              ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)"),
              ("EPAN", "08/09/2026", "EAN (painel 16:38)"),
              ("CENTROFARMA", "08/09/2026", "EAN (promo rede)"),
-             ("TAPAJOS", "08/09/2026", "Cód. interno (planilha RFQ)")]
+             ("TAPAJOS", "08/09/2026", "Cód. interno (planilha RFQ)"),
+             ("NAZARIA", "08/09/2026", "Cód. interno (RFQ, PREÇO FINAL)")]
 
 def digits(v):
     if v is None: return None
@@ -120,6 +121,18 @@ tapajos = {cod: dict(preco=min(vs), prod="", cod="",
                      obs_extra="preços divergentes entre EANs (usado menor)" if len(set(vs)) > 1 else "")
            for cod, vs in _tj.items()}
 
+# Nazária (RFQ 08/09 devolvida com colunas próprias: ESTOQUE-UNIDADES e PREÇO FINAL por caixa)
+wbnz = openpyxl.load_workbook(UP+"4a9f8d23-NAZARIA.xlsx", data_only=True)
+_nz = {}
+for r in wbnz["Cotacao"].iter_rows(min_row=2, values_only=True):
+    if r[0] is None: continue
+    pf, est = r[14], r[11]
+    if isinstance(pf, (int, float)) and pf > 0:
+        _nz.setdefault(r[0], []).append((float(pf), float(est) if isinstance(est, (int, float)) else 0.0))
+nazaria = {cod: dict(preco=min(p for p, _ in vs), estoque=max(e for _, e in vs),
+                     obs_extra="preços divergentes entre EANs (usado menor)" if len({p for p, _ in vs}) > 1 else "")
+           for cod, vs in _nz.items()}
+
 def pack_candidates(nome, extra):
     cands = {1} | set(extra)
     for m in re.finditer(r"\((\d+)\s*X\s*\d+\)", str(nome), re.I): cands.add(int(m.group(1)))
@@ -166,6 +179,18 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     if d["Cód"] in tapajos:
         tj = tapajos[d["Cód"]]
         add("TAPAJOS", tj["preco"], "", "", True, tj["obs_extra"])
+    if d["Cód"] in nazaria:
+        nz = nazaria[d["Cód"]]
+        un_need = d.get("Necessidade") or 0
+        if nz["estoque"] <= 0:
+            obs0 = "sem estoque"
+        elif nz["estoque"] < un_need:
+            obs0 = f"estoque parcial ({int(nz['estoque'])} un)"
+        else:
+            obs0 = ""
+        if nz["obs_extra"]:
+            obs0 = (obs0 + "; " if obs0 else "") + nz["obs_extra"]
+        add("NAZARIA", nz["preco"], "", "", nz["estoque"] > 0, obs0)
     eleg = sorted([(v["pun"], f) for f, v in q.items() if v["eleg"]])
     win = eleg[0][1] if eleg else None
     if win:
