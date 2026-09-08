@@ -13,13 +13,15 @@ from openpyxl.utils import get_column_letter
 UP = "/root/.claude/uploads/506daea3-7102-5cb6-9758-517151fad432/"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saida2")
 os.makedirs(OUT, exist_ok=True)
-FORNS = ["DIMEC", "PLUSFARMA", "EPAN"]  # novos fornecedores entram aqui conforme as cotações chegarem
+FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA"]  # novos fornecedores entram aqui conforme chegarem
 FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
              ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)"),
-             ("EPAN", "08/09/2026", "EAN (painel 16:38)")]
+             ("EPAN", "08/09/2026", "EAN (painel 16:38)"),
+             ("CENTROFARMA", "08/09/2026", "EAN (promo rede)")]
 
 def digits(v):
     if v is None: return None
+    if isinstance(v, float) and v.is_integer(): v = int(v)
     s = re.sub(r"\D", "", str(v))
     return s if len(s) >= 7 else None
 
@@ -91,6 +93,20 @@ for r in wbp["Precos"].iter_rows(min_row=2, values_only=True):
     rec = dict(cod=str(r[0]), prod=r[2], preco=float(r[7]), estoque=str(r[8]).upper()=="SIM")
     for k in keys(r[1]): epan.setdefault(k, rec)
 
+# Centro Farma (PROMO REDE 08/09, .xls legado; exige estoque > 0)
+import xlrd
+wbcf = xlrd.open_workbook(UP+"06bb362f-PROMO_REDE_0809_CENTRO_FARMA.xls")
+wscf = wbcf.sheet_by_index(0)
+centrofarma = {}
+for i in range(1, wscf.nrows):
+    row = [wscf.cell_value(i, j) for j in range(7)]
+    preco = row[6] if isinstance(row[6], (int, float)) else None
+    if not preco or preco <= 0: continue
+    est = row[5] if isinstance(row[5], (int, float)) else 0
+    cod = str(int(row[0])) if isinstance(row[0], float) and row[0].is_integer() else str(row[0])
+    rec = dict(cod=cod, prod=row[2], preco=float(preco), estoque=est)
+    for k in keys(row[1]): centrofarma.setdefault(k, rec)
+
 def pack_candidates(nome, extra):
     cands = {1} | set(extra)
     for m in re.finditer(r"\((\d+)\s*X\s*\d+\)", str(nome), re.I): cands.add(int(m.group(1)))
@@ -131,6 +147,9 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     hit = next((epan[k] for k in ks if k in epan), None)
     if hit: add("EPAN", hit["preco"], hit["prod"], hit["cod"], hit["estoque"],
                 "" if hit["estoque"] else "sem estoque")
+    hit = next((centrofarma[k] for k in ks if k in centrofarma), None)
+    if hit: add("CENTROFARMA", hit["preco"], hit["prod"], hit["cod"], (hit["estoque"] or 0) > 0,
+                "" if (hit["estoque"] or 0) > 0 else "sem estoque")
     eleg = sorted([(v["pun"], f) for f, v in q.items() if v["eleg"]])
     win = eleg[0][1] if eleg else None
     if win:
