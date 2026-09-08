@@ -36,17 +36,19 @@ for r in ws.iter_rows(min_row=7, values_only=True):
         continue
     radar.append(dict(zip(HDR, r)))
 
-# ---- controle antigo: EANs por cód. interno ----
-wbc = openpyxl.load_workbook(UP + "b26d7f19-LISTA_DE_COMPRA_04092026__CONTROLE.xlsx", data_only=True)
-wsc = wbc["Lista_de_Compra"]
-hc = [c.value for c in wsc[1]]
-old_eans = {}
-for r in wsc.iter_rows(min_row=2, values_only=True):
+# ---- base de EANs: SOMENTE a tabela Necessidade 08/09 (EAN princ. + adic. 1-5) ----
+wbn = openpyxl.load_workbook(UP + "a3f3a40b-Necessidade_20260908_162026.xlsx", data_only=True)
+wsn = wbn["Necessidade"]
+hn = [c.value for c in wsn[6]]
+nec_eans = {}
+for r in wsn.iter_rows(min_row=7, values_only=True):
     if r[0] is None:
         continue
-    d = dict(zip(hc, r))
-    lst = [raw_ean(d.get("EAN princ."))] + [raw_ean(d.get(f"EAN adic. {i}")) for i in range(1, 4)]
-    old_eans[d["Cód. interno"]] = [e for e in lst if e]
+    d = dict(zip(hn, r))
+    lst = nec_eans.setdefault(d["Cód. interno"], [])
+    for e in [raw_ean(d.get("EAN princ."))] + [raw_ean(d.get(f"EAN adic. {i}")) for i in range(1, 6)]:
+        if e and norm_ean(e) not in {norm_ean(x) for x in lst}:
+            lst.append(e)
 
 # ---- monta linhas: 1 por EAN (adicionais como linhas) ----
 rows = []
@@ -55,11 +57,7 @@ for d in radar:
     if d.get("OL") not in (None, ""):
         continue  # OL sai da cotação
     n_itens += 1
-    eans, seen = [], set()
-    for e in old_eans.get(d["Cód"], []) + [raw_ean(d.get(f"EAN adic. {i}")) for i in range(1, 6)]:
-        if e and norm_ean(e) not in seen:
-            seen.add(norm_ean(e))
-            eans.append(e)
+    eans = list(nec_eans.get(d["Cód"], []))
     if not eans:
         eans = [""]
         n_sem_ean += 1

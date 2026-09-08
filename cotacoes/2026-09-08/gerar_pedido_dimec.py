@@ -58,15 +58,19 @@ for r in wbd["geral"].iter_rows(min_row=2, values_only=True):
 wb = openpyxl.load_workbook(UP + "f22e9ec6-Radar_Pareto_20260908_102517.xlsx", data_only=True)
 ws = wb["Radar_Pareto"]
 hdr = [c.value for c in ws[6]]
-wbc = openpyxl.load_workbook(UP + "b26d7f19-LISTA_DE_COMPRA_04092026__CONTROLE.xlsx", data_only=True)
-wsc = wbc["Lista_de_Compra"]
-hc = [c.value for c in wsc[1]]
-old = {}
-for r in wsc.iter_rows(min_row=2, values_only=True):
+# base de EANs: SOMENTE a tabela Necessidade 08/09 (EAN princ. + adic. 1-5)
+wbn = openpyxl.load_workbook(UP + "a3f3a40b-Necessidade_20260908_162026.xlsx", data_only=True)
+wsn = wbn["Necessidade"]
+hn = [c.value for c in wsn[6]]
+nec_eans = {}
+for r in wsn.iter_rows(min_row=7, values_only=True):
     if r[0] is None:
         continue
-    d = dict(zip(hc, r))
-    old[d["Cód. interno"]] = [d.get("EAN princ.")] + [d.get(f"EAN adic. {i}") for i in range(1, 4)]
+    dn = dict(zip(hn, r))
+    lst = nec_eans.setdefault(dn["Cód. interno"], [])
+    for e in [dn.get("EAN princ.")] + [dn.get(f"EAN adic. {i}") for i in range(1, 6)]:
+        if e not in (None, "") and e not in lst:
+            lst.append(e)
 
 itens = []
 for r in ws.iter_rows(min_row=7, values_only=True):
@@ -76,7 +80,7 @@ for r in ws.iter_rows(min_row=7, values_only=True):
     if d["OL"] not in (None, ""):
         continue
     ks = set()
-    for src in [d.get(f"EAN adic. {i}") for i in range(1, 6)] + old.get(d["Cód"], []):
+    for src in nec_eans.get(d["Cód"], []):
         ks |= keys(src)
     hit = next((dimec_by_key[k] for k in ks if k in dimec_by_key), None)
     if not hit:
@@ -96,6 +100,8 @@ for r in ws.iter_rows(min_row=7, values_only=True):
         obs.append(f"1 emb. Dimec = {mult} un do Radar (pedido = {qtd} emb.)")
     if hit["estoque"] < qtd:
         obs.append(f"estoque parcial ({int(hit['estoque'])})")
+    if ref and not (0.5 <= (hit["preco"] / mult) / ref <= 2.0):
+        obs.append("conferir embalagem (preço muito fora da referência)")
     itens.append((d, hit, ult, hist, cx, mult, qtd, "; ".join(obs)))
 
 # ---- planilha ----
@@ -142,7 +148,7 @@ tc.font = Font(name=F, bold=True, size=10)
 tc.number_format = "#,##0.00"
 lg = wso.cell(row=n + 3, column=1,
               value=("Pedido Dimec (catálogo 'preço 2%') × Radar Pareto 08/09/2026 — casado por TODOS os EANs "
-                     "(Radar adic. 1-5 + controle 04/09), com equivalência DUN-14/EAN-13. SEM LIMIAR DE PREÇOS: "
+                     "(base Necessidade 08/09: EAN princ. + adic. 1-5), com equivalência DUN-14/EAN-13. SEM LIMIAR DE PREÇOS: "
                      "todos os itens casados entram; 'Últ. compra' e 'Menor hist.' (3/6/12m) são referência. "
                      "'Un/Emb' = unidades do Radar por embalagem Dimec (detectado pelo nome e preço); "
                      "'Qtd pedido' já convertida para embalagens Dimec (arredondada para cima)."))
