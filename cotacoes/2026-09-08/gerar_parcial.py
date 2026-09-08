@@ -13,9 +13,10 @@ from openpyxl.utils import get_column_letter
 UP = "/root/.claude/uploads/506daea3-7102-5cb6-9758-517151fad432/"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saida2")
 os.makedirs(OUT, exist_ok=True)
-FORNS = ["DIMEC", "PLUSFARMA"]  # novos fornecedores entram aqui conforme as cotações chegarem
+FORNS = ["DIMEC", "PLUSFARMA", "EPAN"]  # novos fornecedores entram aqui conforme as cotações chegarem
 FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
-             ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)")]
+             ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)"),
+             ("EPAN", "08/09/2026", "EAN (painel 16:38)")]
 
 def digits(v):
     if v is None: return None
@@ -82,6 +83,14 @@ for r in wbpf["in"].iter_rows(min_row=1, values_only=True):
     rec = dict(cod=str(r[0]), prod=str(r[2] or "").strip(), preco=unit, estoque=True)
     for k in keys(r[4]): plusfarma.setdefault(k, rec)
 
+# ePan (painel 08/09 16:38, por EAN; preço líquido c/ ST; exige estoque SIM)
+wbp = openpyxl.load_workbook(UP+"5f3474e5-ePan_Precos_20260908_1638.xlsx", data_only=True)
+epan = {}
+for r in wbp["Precos"].iter_rows(min_row=2, values_only=True):
+    if not isinstance(r[7],(int,float)) or r[7] <= 0: continue
+    rec = dict(cod=str(r[0]), prod=r[2], preco=float(r[7]), estoque=str(r[8]).upper()=="SIM")
+    for k in keys(r[1]): epan.setdefault(k, rec)
+
 def pack_candidates(nome, extra):
     cands = {1} | set(extra)
     for m in re.finditer(r"\((\d+)\s*X\s*\d+\)", str(nome), re.I): cands.add(int(m.group(1)))
@@ -119,6 +128,9 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
                 "" if (hit["estoque"] or 0) > 0 else "sem estoque")
     hit = next((plusfarma[k] for k in ks if k in plusfarma), None)
     if hit: add("PLUSFARMA", hit["preco"], hit["prod"], hit["cod"], True)
+    hit = next((epan[k] for k in ks if k in epan), None)
+    if hit: add("EPAN", hit["preco"], hit["prod"], hit["cod"], hit["estoque"],
+                "" if hit["estoque"] else "sem estoque")
     eleg = sorted([(v["pun"], f) for f, v in q.items() if v["eleg"]])
     win = eleg[0][1] if eleg else None
     if win:
