@@ -13,7 +13,9 @@ from openpyxl.utils import get_column_letter
 UP = "/root/.claude/uploads/506daea3-7102-5cb6-9758-517151fad432/"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saida2")
 os.makedirs(OUT, exist_ok=True)
-FORNS = ["DIMEC"]  # novos fornecedores entram aqui conforme as cotações chegarem
+FORNS = ["DIMEC", "PLUSFARMA"]  # novos fornecedores entram aqui conforme as cotações chegarem
+FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
+             ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)")]
 
 def digits(v):
     if v is None: return None
@@ -58,6 +60,28 @@ for r in wbd["geral"].iter_rows(min_row=2, values_only=True):
     rec = dict(cod=str(r[1]), prod=r[2], preco=float(r[4]), estoque=r[5] or 0)
     for k in keys(r[0]): dimec.setdefault(k, rec)
 
+def money_br(s):
+    """Converte 'R$ 2,55' / 'R$ 1.234,56' / 'R$ 18.3' em float."""
+    if s is None: return None
+    t = re.sub(r"[^\d,.\-]", "", str(s))
+    if not t: return None
+    if "," in t and "." in t: t = t.replace(".", "").replace(",", ".")
+    elif "," in t: t = t.replace(",", ".")
+    try: return float(t)
+    except ValueError: return None
+
+# PLUSFARMA (pedido nº 36, formato tipo SB LOG; xlsx enviado como .csv)
+wbpf = openpyxl.load_workbook(os.path.join(os.path.dirname(os.path.abspath(__file__)), "plusfarma.xlsx"), data_only=True)
+plusfarma, started = {}, False
+for r in wbpf["in"].iter_rows(min_row=1, values_only=True):
+    if r[0] is not None and str(r[0]).strip() == "Codigo":
+        started = True; continue
+    if not started or r[0] is None: continue
+    unit = (money_br(r[8]) or 0) + (money_br(r[9]) or 0)
+    if unit <= 0: continue
+    rec = dict(cod=str(r[0]), prod=str(r[2] or "").strip(), preco=unit, estoque=True)
+    for k in keys(r[4]): plusfarma.setdefault(k, rec)
+
 def pack_candidates(nome, extra):
     cands = {1} | set(extra)
     for m in re.finditer(r"\((\d+)\s*X\s*\d+\)", str(nome), re.I): cands.add(int(m.group(1)))
@@ -93,6 +117,8 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     hit = next((dimec[k] for k in ks if k in dimec), None)
     if hit: add("DIMEC", hit["preco"], hit["prod"], hit["cod"], (hit["estoque"] or 0) > 0,
                 "" if (hit["estoque"] or 0) > 0 else "sem estoque")
+    hit = next((plusfarma[k] for k in ks if k in plusfarma), None)
+    if hit: add("PLUSFARMA", hit["preco"], hit["prod"], hit["cod"], True)
     eleg = sorted([(v["pun"], f) for f, v in q.items() if v["eleg"]])
     win = eleg[0][1] if eleg else None
     if win:
@@ -134,30 +160,37 @@ wsC = wbo.create_sheet("Controle")
 
 # ---------- Controle ----------
 # A..O: fornecedores começam em J; K=Melhor forn., L=Melhor(un), M=Dif.%, N=Status, O=OBS
-CH = ["Cód. interno","EAN princ.","Produto","Grupo","ABC","Caixas","Unid.","Últ. compra","Menor hist.",
-      "DIMEC (un)","Melhor forn.","Melhor (un)","Dif. %","Status","OBS"]
+nF = len(FORNS)
+colMF = 10 + nF          # Melhor forn.
+colMP = colMF + 1        # Melhor (un)
+colDIF = colMP + 1
+colST = colDIF + 1
+colOBS = colST + 1
+L = get_column_letter
+CH = (["Cód. interno","EAN princ.","Produto","Grupo","ABC","Caixas","Unid.","Últ. compra","Menor hist."]
+      + [f + " (un)" for f in FORNS] + ["Melhor forn.","Melhor (un)","Dif. %","Status","OBS"])
 wsC.append(CH)
 itens.sort(key=lambda x: str(x["d"]["Produto"]))
 for i, it in enumerate(itens, start=2):
     d, q = it["d"], it["q"]
     obs = "; ".join(f"{f}: {v['obs']}" for f, v in q.items() if v["obs"])
     dif = None
-    if it["win"] and it["ult"]: dif = f"=L{i}/H{i}-1"
-    elif it["win"] and it["hist"]: dif = f"=L{i}/I{i}-1"
+    if it["win"] and it["ult"]: dif = f"={L(colMP)}{i}/H{i}-1"
+    elif it["win"] and it["hist"]: dif = f"={L(colMP)}{i}/I{i}-1"
     wsC.append([d["Cód"], str(it["ean"]), d["Produto"], d.get("Grupo"), d.get("ABC"), it["cx"],
-                d.get("Necessidade"), it["ult"], it["hist"],
-                q.get("DIMEC",{}).get("pun"),
-                it["win"] or "SEM COTAÇÃO",
-                q[it["win"]]["pun"] if it["win"] else None, dif, it["status"], obs])
+                d.get("Necessidade"), it["ult"], it["hist"]]
+               + [q.get(f, {}).get("pun") for f in FORNS]
+               + [it["win"] or "SEM COTAÇÃO",
+                  q[it["win"]]["pun"] if it["win"] else None, dif, it["status"], obs])
 nC = len(itens) + 1
-style(wsC, [11,15,46,16,6,8,8,10,10,10,13,10,9,17,30], nC,
-      money_cols=(8,9,10,12), int_cols=(6,7), pct_cols=(13,))
+style(wsC, [11,15,46,16,6,8,8,10,10] + [10]*nF + [13,10,9,17,30], nC,
+      money_cols=tuple([8,9] + list(range(10, 10+nF)) + [colMP]), int_cols=(6,7), pct_cols=(colDIF,))
 for row in wsC.iter_rows(min_row=2, max_row=nC, min_col=2, max_col=2): row[0].number_format = "@"
 for i, it in enumerate(itens, start=2):
     if it["win"]:
         wsC.cell(row=i, column=10 + FORNS.index(it["win"])).fill = WIN_FILL
     s = it["status"]
-    c = wsC.cell(row=i, column=14)
+    c = wsC.cell(row=i, column=colST)
     if s.startswith("OK"): c.fill = OK_FILL
     elif s.startswith("ACIMA"): c.fill = WARN_FILL
 
@@ -192,12 +225,13 @@ wsR["A2"] = ("Base: Radar Pareto 08/09 (itens sem OL) • EANs: tabela Necessida
 wsR["A2"].font = Font(name=F, italic=True, size=9)
 
 wsR["A4"] = "Visão geral"; wsR["A4"].font = Font(name=F, bold=True, size=11)
+cMF, cST = L(colMF), L(colST)
 geral = [
     ("Itens em cotação (Radar sem OL)", len(itens)),
-    ("Itens com ≥ 1 cotação", f'=COUNTIF(Controle!K2:K{nC},"<>SEM COTAÇÃO")'),
-    ("Itens ainda sem cotação", f'=COUNTIF(Controle!K2:K{nC},"SEM COTAÇÃO")'),
-    ("Itens OK (≤ menor hist. ou últ. compra)", f'=COUNTIF(Controle!N2:N{nC},"OK*")'),
-    ("Itens acima do histórico", f'=COUNTIF(Controle!N2:N{nC},"ACIMA*")'),
+    ("Itens com ≥ 1 cotação", f'=COUNTIF(Controle!{cMF}2:{cMF}{nC},"<>SEM COTAÇÃO")'),
+    ("Itens ainda sem cotação", f'=COUNTIF(Controle!{cMF}2:{cMF}{nC},"SEM COTAÇÃO")'),
+    ("Itens OK (≤ menor hist. ou últ. compra)", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"OK*")'),
+    ("Itens acima do histórico", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"ACIMA*")'),
 ]
 r0 = 5
 for j, (lab, val) in enumerate(geral):
@@ -210,19 +244,25 @@ hdr2 = ["Fornecedor","Data cotação","Base de casamento","Itens cotados","Vence
 for j, h in enumerate(hdr2, 1):
     c = wsR.cell(row=r1+1, column=j, value=h)
     c.font = Font(name=F, bold=True, color="FFFFFF", size=10); c.fill = H_FILL; c.border = THIN
-meta = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)", "J")]
-for j, (f, dt, base, col) in enumerate(meta):
+for j, (f, dt, base) in enumerate(FORN_META):
     rr = r1 + 2 + j
+    col = L(10 + FORNS.index(f))
     wsR.cell(row=rr, column=1, value=f)
     wsR.cell(row=rr, column=2, value=dt)
     wsR.cell(row=rr, column=3, value=base)
     wsR.cell(row=rr, column=4, value=f"=COUNT(Controle!{col}2:{col}{nC})")
-    wsR.cell(row=rr, column=5, value=f'=COUNTIF(Controle!K2:K{nC},"{f}")')
+    wsR.cell(row=rr, column=5, value=f'=COUNTIF(Controle!{cMF}2:{cMF}{nC},"{f}")')
     wsR.cell(row=rr, column=6, value=f"=Ped_{f}!I{ped_rows[f]}")
     for cc in range(1, 7):
         cell = wsR.cell(row=rr, column=cc); cell.font = Font(name=F, size=10); cell.border = THIN
         if cc == 6: cell.number_format = "#,##0.00"
-rr = r1 + 2 + len(meta)
+rr = r1 + 1 + len(FORN_META)
+rr += 1
+wsR.cell(row=rr, column=1, value="TOTAL").font = Font(name=F, bold=True, size=10)
+for cc, colL2 in ((4, "D"), (5, "E"), (6, "F")):
+    c = wsR.cell(row=rr, column=cc, value=f"=SUM({colL2}{r1+2}:{colL2}{rr-1})")
+    c.font = Font(name=F, bold=True, size=10); c.border = THIN
+    if cc == 6: c.number_format = "#,##0.00"
 wsR.cell(row=rr+1, column=1, value="Aguardando cotação").font = Font(name=F, bold=True, size=11)
 wsR.cell(row=rr+2, column=1,
          value="Demais fornecedores: planilha COTACAO_FORNECEDORES_08-09-2026.xlsx enviada; conforme voltarem preenchidas, "
