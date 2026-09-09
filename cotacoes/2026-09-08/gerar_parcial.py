@@ -178,6 +178,7 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     ult = d.get("Últ. preço compra") if isinstance(d.get("Últ. preço compra"),(int,float)) and d["Últ. preço compra"]>0 else None
     refs = [d[k] for k in ("Melhor 3m","Melhor 6m","Melhor 12m") if isinstance(d.get(k),(int,float)) and d[k]>0]
     hist = min(refs) if refs else None
+    med = sum(refs)/len(refs) if refs else None
     ref = ult if ult is not None else hist
     cx = d.get("Caixas") or 0
     uncx = old_uncx.get(d["Cód"], 1)
@@ -233,7 +234,7 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
         else: status = "ACIMA +%.1f%%" % ((w["pun"]/ref - 1) * 100)
     else:
         status = ""
-    itens.append(dict(d=d, q=q, win=win, status=status, ult=ult, hist=hist, cx=cx,
+    itens.append(dict(d=d, q=q, win=win, status=status, ult=ult, hist=hist, med=med, cx=cx,
                       ean=(nec_eans.get(d["Cód"]) or [""])[0]))
 
 # ---------- estilos ----------
@@ -265,34 +266,37 @@ wsC = wbo.create_sheet("Controle")
 # ---------- Controle ----------
 # A..O: fornecedores começam em J; K=Melhor forn., L=Melhor(un), M=Dif.%, N=Status, O=OBS
 nF = len(FORNS)
-colMF = 10 + nF          # Melhor forn.
+FCOL0 = 11               # 1ª coluna de fornecedor (K): A..J = dados fixos (J = Média hist.)
+colMF = FCOL0 + nF       # Melhor forn.
 colMP = colMF + 1        # Melhor (un)
-colDIF = colMP + 1
-colST = colDIF + 1
+colDMED = colMP + 1      # % vs média hist.
+colDULT = colDMED + 1    # % vs últ. compra
+colST = colDULT + 1
 colOBS = colST + 1
 L = get_column_letter
-CH = (["Cód. interno","EAN princ.","Produto","Grupo","ABC","Caixas","Unid.","Últ. compra","Menor hist."]
-      + [f + " (un)" for f in FORNS] + ["Melhor forn.","Melhor (un)","Dif. %","Status","OBS"])
+CH = (["Cód. interno","EAN princ.","Produto","Grupo","ABC","Caixas","Unid.","Últ. compra","Menor hist.","Média hist."]
+      + [f + " (un)" for f in FORNS]
+      + ["Melhor forn.","Melhor (un)","% vs média hist.","% vs últ. compra","Status","OBS"])
 wsC.append(CH)
 itens.sort(key=lambda x: str(x["d"]["Produto"]))
 for i, it in enumerate(itens, start=2):
     d, q = it["d"], it["q"]
     obs = "; ".join(f"{f}: {v['obs']}" for f, v in q.items() if v["obs"])
-    dif = None
-    if it["win"] and it["ult"]: dif = f"={L(colMP)}{i}/H{i}-1"
-    elif it["win"] and it["hist"]: dif = f"={L(colMP)}{i}/I{i}-1"
+    dmed = f"={L(colMP)}{i}/J{i}-1" if (it["win"] and it["med"]) else None
+    dult = f"={L(colMP)}{i}/H{i}-1" if (it["win"] and it["ult"]) else None
     wsC.append([d["Cód"], str(it["ean"]), d["Produto"], d.get("Grupo"), d.get("ABC"), it["cx"],
-                d.get("Necessidade"), it["ult"], it["hist"]]
+                d.get("Necessidade"), it["ult"], it["hist"], it["med"]]
                + [q.get(f, {}).get("pun") for f in FORNS]
                + [it["win"] or "SEM COTAÇÃO",
-                  q[it["win"]]["pun"] if it["win"] else None, dif, it["status"], obs])
+                  q[it["win"]]["pun"] if it["win"] else None, dmed, dult, it["status"], obs])
 nC = len(itens) + 1
-style(wsC, [11,15,46,16,6,8,8,10,10] + [10]*nF + [13,10,9,17,30], nC,
-      money_cols=tuple([8,9] + list(range(10, 10+nF)) + [colMP]), int_cols=(6,7), pct_cols=(colDIF,))
+style(wsC, [11,15,46,16,6,8,8,10,10,10] + [10]*nF + [13,10,10,10,17,30], nC,
+      money_cols=tuple([8,9,10] + list(range(FCOL0, FCOL0+nF)) + [colMP]), int_cols=(6,7),
+      pct_cols=(colDMED, colDULT))
 for row in wsC.iter_rows(min_row=2, max_row=nC, min_col=2, max_col=2): row[0].number_format = "@"
 for i, it in enumerate(itens, start=2):
     if it["win"]:
-        wsC.cell(row=i, column=10 + FORNS.index(it["win"])).fill = WIN_FILL
+        wsC.cell(row=i, column=FCOL0 + FORNS.index(it["win"])).fill = WIN_FILL
     s = it["status"]
     c = wsC.cell(row=i, column=colST)
     if s.startswith("OK"): c.fill = OK_FILL
@@ -300,7 +304,8 @@ for i, it in enumerate(itens, start=2):
 
 # ---------- Pedido-rascunho por fornecedor ----------
 PH = ["Cód. interno","Cód. forn.","EAN","Produto","Un/Emb","Caixas","Qtd pedido","Preço (emb.)","Total",
-      "Preço un. eq.","Últ. compra","Menor hist.","Dif. %","Status","OBS"]
+      "Preço un. eq.","Últ. compra","Menor hist.","Média hist.","% vs média hist.","% vs últ. compra",
+      "Status","OBS"]
 ped_rows = {}
 for f in FORNS:
     wsP = wbo.create_sheet("Ped_"+f)
@@ -308,13 +313,14 @@ for f in FORNS:
     sel = [it for it in itens if it["win"] == f]
     for i, it in enumerate(sel, start=2):
         w = it["q"][f]
-        dif = (f"=J{i}/K{i}-1") if it["ult"] else ((f"=J{i}/L{i}-1") if it["hist"] else None)
+        dmed = f"=J{i}/M{i}-1" if it["med"] else None
+        dult = f"=J{i}/K{i}-1" if it["ult"] else None
         wsP.append([it["d"]["Cód"], w["cod"], str(it["ean"]), it["d"]["Produto"], w["mult"], it["cx"],
-                    w["qtd"], w["preco"], f"=G{i}*H{i}", f"=H{i}/E{i}", it["ult"], it["hist"], dif,
-                    it["status"], w["obs"]])
+                    w["qtd"], w["preco"], f"=G{i}*H{i}", f"=H{i}/E{i}", it["ult"], it["hist"], it["med"],
+                    dmed, dult, it["status"], w["obs"]])
     n = len(sel) + 1
-    style(wsP, [11,10,15,46,8,8,9,11,11,11,10,10,9,17,26], n,
-          money_cols=(8,9,10,11,12), int_cols=(5,6,7), pct_cols=(13,))
+    style(wsP, [11,10,15,46,8,8,9,11,11,11,10,10,10,10,10,17,26], n,
+          money_cols=(8,9,10,11,12,13), int_cols=(5,6,7), pct_cols=(14,15))
     for row in wsP.iter_rows(min_row=2, max_row=n, min_col=3, max_col=3): row[0].number_format = "@"
     wsP.cell(row=n+1, column=4, value="TOTAL").font = Font(name=F, bold=True, size=10)
     tc = wsP.cell(row=n+1, column=9, value=f"=SUM(I2:I{n})")
@@ -350,7 +356,7 @@ for j, h in enumerate(hdr2, 1):
     c.font = Font(name=F, bold=True, color="FFFFFF", size=10); c.fill = H_FILL; c.border = THIN
 for j, (f, dt, base) in enumerate(FORN_META):
     rr = r1 + 2 + j
-    col = L(10 + FORNS.index(f))
+    col = L(FCOL0 + FORNS.index(f))
     wsR.cell(row=rr, column=1, value=f)
     wsR.cell(row=rr, column=2, value=dt)
     wsR.cell(row=rr, column=3, value=base)
