@@ -17,7 +17,7 @@ FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA", "TAPAJOS", "NAZARIA", "MED
          "AT_SUPLEMENTOS"]
 FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
              ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)"),
-             ("EPAN", "08/09/2026", "EAN (painel 16:38)"),
+             ("EPAN", "09/09/2026", "EAN (catálogo Panpharma CSV)"),
              ("CENTROFARMA", "08/09/2026", "EAN (promo rede)"),
              ("TAPAJOS", "08/09/2026", "Cód. interno (planilha RFQ)"),
              ("NAZARIA", "08/09/2026", "Cód. interno (RFQ, PREÇO FINAL)"),
@@ -91,13 +91,20 @@ for r in wbpf["in"].iter_rows(min_row=1, values_only=True):
     rec = dict(cod=str(r[0]), prod=str(r[2] or "").strip(), preco=unit, estoque=True)
     for k in keys(r[4]): plusfarma.setdefault(k, rec)
 
-# ePan (painel 08/09 16:38, por EAN; preço líquido c/ ST; exige estoque SIM)
-wbp = openpyxl.load_workbook(UP+"5f3474e5-ePan_Precos_20260908_1638.xlsx", data_only=True)
+# ePan/Panpharma (atualização 09/09: CSV precos_712093, catálogo completo; menor entre à vista 7d e prazo 35d)
+import csv
 epan = {}
-for r in wbp["Precos"].iter_rows(min_row=2, values_only=True):
-    if not isinstance(r[7],(int,float)) or r[7] <= 0: continue
-    rec = dict(cod=str(r[0]), prod=r[2], preco=float(r[7]), estoque=str(r[8]).upper()=="SIM")
-    for k in keys(r[1]): epan.setdefault(k, rec)
+def _num_br(s):
+    try: return float(str(s).replace(".", "").replace(",", ".")) if s not in (None, "") else None
+    except ValueError: return None
+with open(UP+"ddb963c0-precos_712093.csv", encoding="utf-8-sig", newline="") as fh:
+    for row in csv.DictReader(fh, delimiter=";"):
+        avista, prazo = _num_br(row.get("LIQ_AVISTA_7d")), _num_br(row.get("LIQ_PRAZO_35d"))
+        precos = [p for p in (avista, prazo) if p and p > 0]
+        if not precos: continue
+        rec = dict(cod=str(row.get("CODIGO") or ""), prod=row.get("DESCRICAO"),
+                   preco=min(precos), estoque=True)
+        for k in keys(row.get("EAN")): epan.setdefault(k, rec)
 
 # Centro Farma (PROMO REDE 08/09, .xls legado; exige estoque > 0)
 import xlrd
@@ -212,8 +219,7 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     hit = next((plusfarma[k] for k in ks if k in plusfarma), None)
     if hit: add("PLUSFARMA", hit["preco"], hit["prod"], hit["cod"], True)
     hit = next((epan[k] for k in ks if k in epan), None)
-    if hit: add("EPAN", hit["preco"], hit["prod"], hit["cod"], hit["estoque"],
-                "" if hit["estoque"] else "sem estoque")
+    if hit: add("EPAN", hit["preco"], hit["prod"], hit["cod"], True)
     hit = next((centrofarma[k] for k in ks if k in centrofarma), None)
     if hit: add("CENTROFARMA", hit["preco"], hit["prod"], hit["cod"], (hit["estoque"] or 0) > 0,
                 "" if (hit["estoque"] or 0) > 0 else "sem estoque")
