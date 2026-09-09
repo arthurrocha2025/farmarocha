@@ -13,7 +13,8 @@ from openpyxl.utils import get_column_letter
 UP = "/root/.claude/uploads/506daea3-7102-5cb6-9758-517151fad432/"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saida2")
 os.makedirs(OUT, exist_ok=True)
-FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA", "TAPAJOS", "NAZARIA", "MEDCENTRO", "BRASFARMA"]
+FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA", "TAPAJOS", "NAZARIA", "MEDCENTRO", "BRASFARMA",
+         "AT_SUPLEMENTOS"]
 FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
              ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)"),
              ("EPAN", "08/09/2026", "EAN (painel 16:38)"),
@@ -21,7 +22,8 @@ FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
              ("TAPAJOS", "08/09/2026", "Cód. interno (planilha RFQ)"),
              ("NAZARIA", "08/09/2026", "Cód. interno (RFQ, PREÇO FINAL)"),
              ("MEDCENTRO", "08/09/2026", "Cód. interno (planilha RFQ)"),
-             ("BRASFARMA", "09/09/2026", "Cód. interno (planilha RFQ)")]
+             ("BRASFARMA", "09/09/2026", "Cód. interno (planilha RFQ)"),
+             ("AT_SUPLEMENTOS", "09/09/2026", "Cód. interno (planilha RFQ)")]
 
 def digits(v):
     if v is None: return None
@@ -159,6 +161,18 @@ brasfarma = {cod: dict(preco=min(vs),
                        obs_extra="preços divergentes entre EANs (usado menor)" if len(set(vs)) > 1 else "")
              for cod, vs in _bf.items()}
 
+# AT Suplementos (RFQ 09/09 preenchida; por cód. interno; EAN alternativo unificado pelo menor VALOR)
+wbat = openpyxl.load_workbook(UP+"b4653808-at_suplementos.xlsx", data_only=True)
+_at = {}
+for r in wbat["Cotacao"].iter_rows(min_row=2, values_only=True):
+    if r[0] is None: continue
+    v = r[8]
+    if isinstance(v, (int, float)) and v > 0:
+        _at.setdefault(r[0], []).append(float(v))
+at_supl = {cod: dict(preco=min(vs),
+                     obs_extra="preços divergentes entre EANs (usado menor)" if len(set(vs)) > 1 else "")
+           for cod, vs in _at.items()}
+
 def pack_candidates(nome, extra):
     cands = {1} | set(extra)
     for m in re.finditer(r"\((\d+)\s*X\s*\d+\)", str(nome), re.I): cands.add(int(m.group(1)))
@@ -224,6 +238,9 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     if d["Cód"] in brasfarma:
         bf = brasfarma[d["Cód"]]
         add("BRASFARMA", bf["preco"], "", "", True, bf["obs_extra"])
+    if d["Cód"] in at_supl:
+        at = at_supl[d["Cód"]]
+        add("AT_SUPLEMENTOS", at["preco"], "", "", True, at["obs_extra"])
     eleg = sorted([(v["pun"], f) for f, v in q.items() if v["eleg"]])
     win = eleg[0][1] if eleg else None
     if win:
