@@ -13,14 +13,15 @@ from openpyxl.utils import get_column_letter
 UP = "/root/.claude/uploads/506daea3-7102-5cb6-9758-517151fad432/"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saida2")
 os.makedirs(OUT, exist_ok=True)
-FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA", "TAPAJOS", "NAZARIA", "MEDCENTRO"]
+FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA", "TAPAJOS", "NAZARIA", "MEDCENTRO", "BRASFARMA"]
 FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
              ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)"),
              ("EPAN", "08/09/2026", "EAN (painel 16:38)"),
              ("CENTROFARMA", "08/09/2026", "EAN (promo rede)"),
              ("TAPAJOS", "08/09/2026", "Cód. interno (planilha RFQ)"),
              ("NAZARIA", "08/09/2026", "Cód. interno (RFQ, PREÇO FINAL)"),
-             ("MEDCENTRO", "08/09/2026", "Cód. interno (planilha RFQ)")]
+             ("MEDCENTRO", "08/09/2026", "Cód. interno (planilha RFQ)"),
+             ("BRASFARMA", "09/09/2026", "Cód. interno (planilha RFQ)")]
 
 def digits(v):
     if v is None: return None
@@ -146,6 +147,18 @@ medcentro = {cod: dict(preco=min(vs),
                        obs_extra="preços divergentes entre EANs (usado menor)" if len(set(vs)) > 1 else "")
              for cod, vs in _mc.items()}
 
+# Brasfarma (RFQ 09/09 preenchida; por cód. interno; linhas de EAN alternativo unificadas pelo menor VALOR)
+wbbf = openpyxl.load_workbook(UP+"66f233d3-BRASFARMA.xlsx", data_only=True)
+_bf = {}
+for r in wbbf["Cotacao"].iter_rows(min_row=2, values_only=True):
+    if r[0] is None: continue
+    v = r[8]
+    if isinstance(v, (int, float)) and v > 0:
+        _bf.setdefault(r[0], []).append(float(v))
+brasfarma = {cod: dict(preco=min(vs),
+                       obs_extra="preços divergentes entre EANs (usado menor)" if len(set(vs)) > 1 else "")
+             for cod, vs in _bf.items()}
+
 def pack_candidates(nome, extra):
     cands = {1} | set(extra)
     for m in re.finditer(r"\((\d+)\s*X\s*\d+\)", str(nome), re.I): cands.add(int(m.group(1)))
@@ -207,6 +220,9 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     if d["Cód"] in medcentro:
         mc = medcentro[d["Cód"]]
         add("MEDCENTRO", mc["preco"], "", "", True, mc["obs_extra"])
+    if d["Cód"] in brasfarma:
+        bf = brasfarma[d["Cód"]]
+        add("BRASFARMA", bf["preco"], "", "", True, bf["obs_extra"])
     eleg = sorted([(v["pun"], f) for f, v in q.items() if v["eleg"]])
     win = eleg[0][1] if eleg else None
     if win:
