@@ -243,15 +243,29 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
         add("AT_SUPLEMENTOS", at["preco"], "", "", True, at["obs_extra"])
     eleg = sorted([(v["pun"], f) for f, v in q.items() if v["eleg"]])
     win = eleg[0][1] if eleg else None
+    cob = d.get("Cobertura(d)")
+    zerado = isinstance(cob, (int, float)) and cob <= 0
+    lim = 0.10 if zerado else 0.05  # reajuste tolerado: 5%; 10% se item zerado
+    aceito = False
     if win:
         w = q[win]
-        if ref is None: status = "SEM HISTÓRICO"
-        elif hist is not None and w["pun"] <= hist + 1e-4: status = "OK (≤ menor hist.)"
-        elif ult is not None and w["pun"] <= ult + 1e-4: status = "OK (≤ últ. compra)"
-        else: status = "ACIMA +%.1f%%" % ((w["pun"]/ref - 1) * 100)
+        # referência do reajuste: última compra; sem ela, menor histórico
+        if ref is None:
+            status, aceito = "SEM HISTÓRICO", True
+        elif hist is not None and w["pun"] <= hist + 1e-4:
+            status, aceito = "OK (≤ menor hist.)", True
+        elif ult is not None and w["pun"] <= ult + 1e-4:
+            status, aceito = "OK (≤ últ. compra)", True
+        elif w["pun"] <= ref * (1 + lim) + 1e-4:
+            status, aceito = "REAJUSTE +%.1f%% (aceito, lim %d%%%s)" % (
+                (w["pun"]/ref - 1) * 100, int(lim*100), " zerado" if zerado else ""), True
+        else:
+            status = "DESCARTADO +%.1f%% (> lim %d%%%s)" % (
+                (w["pun"]/ref - 1) * 100, int(lim*100), " zerado" if zerado else "")
     else:
         status = ""
-    itens.append(dict(d=d, q=q, win=win, status=status, ult=ult, hist=hist, med=med, cx=cx,
+    itens.append(dict(d=d, q=q, win=win, status=status, aceito=aceito, zerado=zerado, lim=lim,
+                      ult=ult, hist=hist, med=med, cx=cx,
                       ean=(nec_eans.get(d["Cód"]) or [""])[0]))
 
 # ---------- estilos ----------
@@ -259,6 +273,7 @@ F = "Arial"
 H_FILL = PatternFill("solid", fgColor="1F4E79")
 OK_FILL = PatternFill("solid", fgColor="E2EFDA")
 WARN_FILL = PatternFill("solid", fgColor="FCE4D6")
+BAD_FILL = PatternFill("solid", fgColor="F8CBAD")
 WIN_FILL = PatternFill("solid", fgColor="DDEBF7")
 THIN = Border(*[Side(style="thin", color="BFBFBF")]*4)
 
@@ -317,7 +332,8 @@ for i, it in enumerate(itens, start=2):
     s = it["status"]
     c = wsC.cell(row=i, column=colST)
     if s.startswith("OK"): c.fill = OK_FILL
-    elif s.startswith("ACIMA"): c.fill = WARN_FILL
+    elif s.startswith("REAJUSTE"): c.fill = WARN_FILL
+    elif s.startswith("DESCARTADO"): c.fill = BAD_FILL
 
 # ---------- Pedido-rascunho por fornecedor ----------
 PH = ["Cód. interno","Cód. forn.","EAN","Produto","Un/Emb","Caixas","Qtd pedido","Preço (emb.)","Total",
@@ -327,7 +343,7 @@ ped_rows = {}
 for f in FORNS:
     wsP = wbo.create_sheet("Ped_"+f)
     wsP.append(PH)
-    sel = [it for it in itens if it["win"] == f]
+    sel = [it for it in itens if it["win"] == f and it["aceito"]]
     for i, it in enumerate(sel, start=2):
         w = it["q"][f]
         dmed = f"=J{i}/M{i}-1" if it["med"] else None
@@ -344,6 +360,30 @@ for f in FORNS:
     tc.font = Font(name=F, bold=True, size=10); tc.number_format = "#,##0.00"
     ped_rows[f] = n + 1
 
+# ---------- Descartados por preço demasiado ----------
+wsD = wbo.create_sheet("Descartados_Preco", 2)
+DH = ["Cód. interno","EAN","Produto","Grupo","Caixas","Zerado?","Limite","Melhor forn.","Melhor (un)",
+      "Últ. compra","Menor hist.","Média hist.","% vs últ. compra","% vs média hist.","OBS"]
+wsD.append(DH)
+desc = [it for it in itens if it["win"] and not it["aceito"]]
+desc.sort(key=lambda x: str(x["d"]["Produto"]))
+for i, it in enumerate(desc, start=2):
+    w = it["q"][it["win"]]
+    dult = f"=I{i}/J{i}-1" if it["ult"] else None
+    dmed = f"=I{i}/L{i}-1" if it["med"] else None
+    wsD.append([it["d"]["Cód"], str(it["ean"]), it["d"]["Produto"], it["d"].get("Grupo"), it["cx"],
+                "SIM" if it["zerado"] else "NÃO", f"{int(it['lim']*100)}%", it["win"], w["pun"],
+                it["ult"], it["hist"], it["med"], dult, dmed, w["obs"]])
+nD = len(desc) + 1
+style(wsD, [11,15,46,16,8,8,8,13,10,10,10,10,10,10,26], nD,
+      money_cols=(9,10,11,12), int_cols=(5,), pct_cols=(13,14))
+for row in wsD.iter_rows(min_row=2, max_row=nD, min_col=2, max_col=2): row[0].number_format = "@"
+lgD = wsD.cell(row=nD+2, column=1,
+               value="Itens com cotação vencedora ACIMA do limite de reajuste (5% sobre a referência; 10% quando o item "
+                     "está zerado — Cobertura = 0 no Radar). Referência = última compra; sem ela, menor histórico. "
+                     "Ficam FORA dos pedidos-rascunho até renegociação ou nova cotação.")
+lgD.font = Font(name=F, italic=True, size=9)
+
 # ---------- Resumo ----------
 wsR["A1"] = "COTAÇÃO 08/09/2026 — DROGARIAS ROCHA — PARCIAL (em andamento)"
 wsR["A1"].font = Font(name=F, bold=True, size=13)
@@ -358,7 +398,8 @@ geral = [
     ("Itens com ≥ 1 cotação", f'=COUNTIF(Controle!{cMF}2:{cMF}{nC},"<>SEM COTAÇÃO")'),
     ("Itens ainda sem cotação", f'=COUNTIF(Controle!{cMF}2:{cMF}{nC},"SEM COTAÇÃO")'),
     ("Itens OK (≤ menor hist. ou últ. compra)", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"OK*")'),
-    ("Itens acima do histórico", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"ACIMA*")'),
+    ("Reajuste aceito (até 5%; 10% se zerado)", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"REAJUSTE*")'),
+    ("Descartados por preço (> limite)", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"DESCARTADO*")'),
 ]
 r0 = 5
 for j, (lab, val) in enumerate(geral):
@@ -367,7 +408,7 @@ for j, (lab, val) in enumerate(geral):
 
 r1 = r0 + len(geral) + 2
 wsR.cell(row=r1, column=1, value="Detalhe por fornecedor").font = Font(name=F, bold=True, size=11)
-hdr2 = ["Fornecedor","Data cotação","Base de casamento","Itens cotados","Vencendo","Valor rascunho (R$)"]
+hdr2 = ["Fornecedor","Data cotação","Base de casamento","Itens cotados","No pedido","Valor rascunho (R$)"]
 for j, h in enumerate(hdr2, 1):
     c = wsR.cell(row=r1+1, column=j, value=h)
     c.font = Font(name=F, bold=True, color="FFFFFF", size=10); c.fill = H_FILL; c.border = THIN
@@ -378,7 +419,8 @@ for j, (f, dt, base) in enumerate(FORN_META):
     wsR.cell(row=rr, column=2, value=dt)
     wsR.cell(row=rr, column=3, value=base)
     wsR.cell(row=rr, column=4, value=f"=COUNT(Controle!{col}2:{col}{nC})")
-    wsR.cell(row=rr, column=5, value=f'=COUNTIF(Controle!{cMF}2:{cMF}{nC},"{f}")')
+    wsR.cell(row=rr, column=5,
+             value=f'=COUNTIFS(Controle!{cMF}2:{cMF}{nC},"{f}",Controle!{cST}2:{cST}{nC},"<>DESCARTADO*")')
     wsR.cell(row=rr, column=6, value=f"=Ped_{f}!I{ped_rows[f]}")
     for cc in range(1, 7):
         cell = wsR.cell(row=rr, column=cc); cell.font = Font(name=F, size=10); cell.border = THIN
@@ -407,11 +449,12 @@ from collections import Counter
 cnt = Counter(it["win"] or "SEM COTAÇÃO" for it in itens)
 print("itens:", len(itens))
 for f in FORNS:
-    sel = [it for it in itens if it["win"] == f]
+    sel = [it for it in itens if it["win"] == f and it["aceito"]]
     tot = sum(it["q"][f]["preco"] * it["q"][f]["qtd"] for it in sel)
-    print(f"  {f:8s} cotados={sum(1 for it in itens if f in it['q']):4d} vencendo={len(sel):4d} valor=R$ {tot:,.2f}")
+    print(f"  {f:8s} cotados={sum(1 for it in itens if f in it['q']):4d} no_pedido={len(sel):4d} valor=R$ {tot:,.2f}")
 print("  sem cotação:", cnt.get("SEM COTAÇÃO", 0))
 ok = sum(1 for it in itens if it["status"].startswith("OK"))
-ac = sum(1 for it in itens if it["status"].startswith("ACIMA"))
-print(f"  status: OK={ok} ACIMA={ac}")
+rj = sum(1 for it in itens if it["status"].startswith("REAJUSTE"))
+dc = sum(1 for it in itens if it["status"].startswith("DESCARTADO"))
+print(f"  status: OK={ok} REAJUSTE={rj} DESCARTADO={dc}")
 print("salvo:", out)
