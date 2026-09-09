@@ -14,7 +14,7 @@ UP = "/root/.claude/uploads/506daea3-7102-5cb6-9758-517151fad432/"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saida2")
 os.makedirs(OUT, exist_ok=True)
 FORNS = ["DIMEC", "PLUSFARMA", "EPAN", "CENTROFARMA", "TAPAJOS", "NAZARIA", "MEDCENTRO", "BRASFARMA",
-         "AT_SUPLEMENTOS"]
+         "AT_SUPLEMENTOS", "SBLOG"]
 FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
              ("PLUSFARMA", "08/09/2026", "EAN (pedido nº 36)"),
              ("EPAN", "09/09/2026", "EAN (catálogo Panpharma CSV)"),
@@ -23,7 +23,8 @@ FORN_META = [("DIMEC", "08/09/2026", "EAN (todos, c/ DUN-14)"),
              ("NAZARIA", "08/09/2026", "Cód. interno (RFQ, PREÇO FINAL)"),
              ("MEDCENTRO", "08/09/2026", "Cód. interno (planilha RFQ)"),
              ("BRASFARMA", "09/09/2026", "Cód. interno (planilha RFQ)"),
-             ("AT_SUPLEMENTOS", "09/09/2026", "Cód. interno (planilha RFQ)")]
+             ("AT_SUPLEMENTOS", "09/09/2026", "Cód. interno (planilha RFQ)"),
+             ("SBLOG", "09/09/2026", "Cód. interno (RFQ, c/ Estoque SB)")]
 
 def digits(v):
     if v is None: return None
@@ -35,11 +36,13 @@ def ean13_check(b):
     return str((10 - sum(int(d)*(3 if i%2 else 1) for i,d in enumerate(b)) % 10) % 10)
 
 def keys(v):
+    """Lista ordenada e determinística: código original primeiro, depois EAN-13 derivado de DUN-14."""
     s = digits(v)
-    if not s: return set()
-    out = {s.lstrip("0")}
+    if not s: return []
+    out = [s.lstrip("0")]
     if len(s) == 14 and s[0] != "0":
-        out.add((s[1:13] + ean13_check(s[1:13])).lstrip("0"))
+        der = (s[1:13] + ean13_check(s[1:13])).lstrip("0")
+        if der not in out: out.append(der)
     return out
 
 # ---------- bases ----------
@@ -180,6 +183,18 @@ at_supl = {cod: dict(preco=min(vs),
                      obs_extra="preços divergentes entre EANs (usado menor)" if len(set(vs)) > 1 else "")
            for cod, vs in _at.items()}
 
+# SB LOG (RFQ 09/09 devolvida com coluna Estoque SB; por cód. interno; EAN alternativo pelo menor VALOR)
+wbsb = openpyxl.load_workbook(UP+"8e5f4bb5-SBLOG.xlsx", data_only=True)
+_sb = {}
+for r in wbsb["Cotacao"].iter_rows(min_row=2, values_only=True):
+    if r[0] is None: continue
+    v, est = r[8], r[11]
+    if isinstance(v, (int, float)) and v > 0:
+        _sb.setdefault(r[0], []).append((float(v), float(est) if isinstance(est, (int, float)) else 0.0))
+sblog = {cod: dict(preco=min(p for p, _ in vs), estoque=max(e for _, e in vs),
+                   obs_extra="preços divergentes entre EANs (usado menor)" if len({p for p, _ in vs}) > 1 else "")
+         for cod, vs in _sb.items()}
+
 def pack_candidates(nome, extra):
     cands = {1} | set(extra)
     for m in re.finditer(r"\((\d+)\s*X\s*\d+\)", str(nome), re.I): cands.add(int(m.group(1)))
@@ -194,8 +209,10 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     if r[1] is None: continue
     d = dict(zip(hr, r))
     if d["OL"] not in (None,""): continue
-    ks = set()
-    for src in nec_eans.get(d["Cód"], []): ks |= keys(src)
+    ks = []
+    for src in nec_eans.get(d["Cód"], []):
+        for k in keys(src):
+            if k not in ks: ks.append(k)
     ult = d.get("Últ. preço compra") if isinstance(d.get("Últ. preço compra"),(int,float)) and d["Últ. preço compra"]>0 else None
     refs = [d[k] for k in ("Melhor 3m","Melhor 6m","Melhor 12m") if isinstance(d.get(k),(int,float)) and d[k]>0]
     hist = min(refs) if refs else None
@@ -247,6 +264,18 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     if d["Cód"] in at_supl:
         at = at_supl[d["Cód"]]
         add("AT_SUPLEMENTOS", at["preco"], "", "", True, at["obs_extra"])
+    if d["Cód"] in sblog:
+        sb = sblog[d["Cód"]]
+        un_need = d.get("Necessidade") or 0
+        if sb["estoque"] <= 0:
+            obs0 = "sem estoque"
+        elif sb["estoque"] < un_need:
+            obs0 = f"estoque parcial ({int(sb['estoque'])} un)"
+        else:
+            obs0 = ""
+        if sb["obs_extra"]:
+            obs0 = (obs0 + "; " if obs0 else "") + sb["obs_extra"]
+        add("SBLOG", sb["preco"], "", "", sb["estoque"] > 0, obs0)
     eleg = sorted([(v["pun"], f) for f, v in q.items() if v["eleg"]])
     win = eleg[0][1] if eleg else None
     cob = d.get("Cobertura(d)")
