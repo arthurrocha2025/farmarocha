@@ -64,8 +64,8 @@ for f in FORNS:
     tc.font = Font(name=F, bold=True, size=10); tc.number_format = "#,##0.00"
     lg = wsP.cell(row=n+3, column=1,
                   value=(f"Pedido FINAL {f} — cotação 08/09/2026 (fechada 09/09). Somente itens aprovados: "
-                         "preço até 5% acima da referência (últ. compra; sem ela, menor histórico), "
-                         "10% quando o item está zerado. 'Qtd pedido' na embalagem do fornecedor."))
+                         "teto de reajuste de 4% sobre a última compra OU 6% sobre a média histórica (3/6/12m). "
+                         "'Qtd pedido' na embalagem do fornecedor."))
     lg.font = Font(name=F, italic=True, size=9)
     fn = f"PEDIDO_{f}_09-09-2026.xlsx"
     wbo.save(os.path.join(OUT, fn))
@@ -73,38 +73,45 @@ for f in FORNS:
     resumo.append((f, len(sel), tot))
     print(f"{fn}: {len(sel)} itens, R$ {tot:,.2f}")
 
-# ---------------- lista única de OL ----------------
-ol_rows = []
+# ---------------- 1 arquivo por OL (pedido direto, sem cotação) ----------------
+import unicodedata
+def sanitize(name):
+    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")
+
+ols = {}
 for r in wsr.iter_rows(min_row=7, values_only=True):
     if r[1] is None: continue
     d = dict(zip(hr, r))
     if d["OL"] in (None, ""): continue
-    ean = (nec_eans.get(d["Cód"]) or [""])[0]
-    dt = d.get("Data últ. compra")
-    ol_rows.append([str(d["OL"]).strip(), d["Cód"], str(ean), d["Produto"], d.get("Fabricante") or "",
-                    d.get("Grupo") or "", d.get("ABC") or "", d.get("Caixas"), d.get("Necessidade"),
+    ols.setdefault(str(d["OL"]).strip(), []).append(d)
+
+for ol, lst in sorted(ols.items()):
+    lst.sort(key=lambda x: str(x["Produto"]))
+    wbo = openpyxl.Workbook(); wsO = wbo.active; wsO.title = "Pedido_OL"
+    wsO.append(["Cód. interno","EAN princ.","Produto","Fabricante","Grupo","ABC","Caixas","Unidades",
+                "Últ. preço compra","Data últ. compra"])
+    for d in lst:
+        ean = (nec_eans.get(d["Cód"]) or [""])[0]
+        dt = d.get("Data últ. compra")
+        wsO.append([d["Cód"], str(ean), d["Produto"], d.get("Fabricante") or "", d.get("Grupo") or "",
+                    d.get("ABC") or "", d.get("Caixas"), d.get("Necessidade"),
                     d.get("Últ. preço compra") or None,
                     dt.strftime("%d/%m/%Y") if hasattr(dt, "strftime") else (dt or "")])
-ol_rows.sort(key=lambda x: (x[0], str(x[3])))
-wbo = openpyxl.Workbook(); wsO = wbo.active; wsO.title = "Lista_OL"
-wsO.append(["OL","Cód. interno","EAN princ.","Produto","Fabricante","Grupo","ABC","Caixas","Unidades",
-            "Últ. preço compra","Data últ. compra"])
-for row in ol_rows: wsO.append(row)
-nO = len(ol_rows) + 1
-style(wsO, [26,11,15,46,20,16,6,8,9,12,12], nO, money_cols=(10,), int_cols=(8,9))
-for row in wsO.iter_rows(min_row=2, max_row=nO, min_col=3, max_col=3): row[0].number_format = "@"
-wsO.cell(row=nO+1, column=4, value="TOTAL").font = Font(name=F, bold=True, size=10)
-for col in ("H","I"):
-    c = wsO.cell(row=nO+1, column=8 if col=="H" else 9, value=f"=SUM({col}2:{col}{nO})")
-    c.font = Font(name=F, bold=True, size=10); c.number_format = "0"
-lg = wsO.cell(row=nO+3, column=1,
-              value="Todos os itens com OL do Radar Pareto 08/09 em uma única lista (a coluna OL agrupa; "
-                    "sem cotação — compra direta no OL). EAN da base Necessidade 08/09; 'Últ. preço compra' apenas referência.")
-lg.font = Font(name=F, italic=True, size=9)
-wbo.save(os.path.join(OUT, "LISTA_OL_09-09-2026.xlsx"))
-from collections import Counter
-cnt_ol = Counter(r[0] for r in ol_rows)
-print(f"\nLISTA_OL: {len(ol_rows)} itens em {len(cnt_ol)} OLs")
-for k, v in cnt_ol.most_common(): print(f"  {k}: {v}")
+    nO = len(lst) + 1
+    style(wsO, [11,15,46,20,16,6,8,9,12,12], nO, money_cols=(9,), int_cols=(7,8))
+    for row in wsO.iter_rows(min_row=2, max_row=nO, min_col=2, max_col=2): row[0].number_format = "@"
+    wsO.cell(row=nO+1, column=3, value="TOTAL").font = Font(name=F, bold=True, size=10)
+    for cc, colL in ((7, "G"), (8, "H")):
+        c = wsO.cell(row=nO+1, column=cc, value=f"=SUM({colL}2:{colL}{nO})")
+        c.font = Font(name=F, bold=True, size=10); c.number_format = "0"
+    lg = wsO.cell(row=nO+3, column=1,
+                  value=f"Pedido direto OL {ol} — Radar Pareto 08/09 (fora da cotação). "
+                        "EAN da base Necessidade 08/09; 'Últ. preço compra' apenas referência.")
+    lg.font = Font(name=F, italic=True, size=9)
+    wbo.save(os.path.join(OUT, f"OL_{sanitize(ol)}_09-09-2026.xlsx"))
+
+print(f"\nOLs: {len(ols)} arquivos, {sum(len(v) for v in ols.values())} itens")
+for k in sorted(ols, key=lambda x: -len(ols[x])): print(f"  OL_{sanitize(k)}: {len(ols[k])}")
 tot_ped = sum(t for _, _, t in resumo)
 print(f"\nTOTAL pedidos distribuidores: {sum(n for _, n, _ in resumo)} itens, R$ {tot_ped:,.2f}")

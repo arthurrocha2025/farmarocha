@@ -251,26 +251,28 @@ for r in wsr.iter_rows(min_row=7, values_only=True):
     win = eleg[0][1] if eleg else None
     cob = d.get("Cobertura(d)")
     zerado = isinstance(cob, (int, float)) and cob <= 0
-    lim = 0.10 if zerado else 0.05  # reajuste tolerado: 5%; 10% se item zerado
+    lim_txt = "4% últ. / 6% média"  # teto de reajuste: 4% sobre últ. compra OU 6% sobre média hist.
     aceito = False
     if win:
         w = q[win]
-        # referência do reajuste: última compra; sem ela, menor histórico
-        if ref is None:
+        if ult is None and med is None:
             status, aceito = "SEM HISTÓRICO", True
-        elif hist is not None and w["pun"] <= hist + 1e-4:
-            status, aceito = "OK (≤ menor hist.)", True
         elif ult is not None and w["pun"] <= ult + 1e-4:
             status, aceito = "OK (≤ últ. compra)", True
-        elif w["pun"] <= ref * (1 + lim) + 1e-4:
-            status, aceito = "REAJUSTE +%.1f%% (aceito, lim %d%%%s)" % (
-                (w["pun"]/ref - 1) * 100, int(lim*100), " zerado" if zerado else ""), True
+        elif med is not None and w["pun"] <= med + 1e-4:
+            status, aceito = "OK (≤ média hist.)", True
+        elif ult is not None and w["pun"] <= ult * 1.04 + 1e-4:
+            status, aceito = "REAJUSTE +%.1f%% vs últ. (≤4%%)" % ((w["pun"]/ult - 1) * 100), True
+        elif med is not None and w["pun"] <= med * 1.06 + 1e-4:
+            status, aceito = "REAJUSTE +%.1f%% vs média (≤6%%)" % ((w["pun"]/med - 1) * 100), True
         else:
-            status = "DESCARTADO +%.1f%% (> lim %d%%%s)" % (
-                (w["pun"]/ref - 1) * 100, int(lim*100), " zerado" if zerado else "")
+            partes = []
+            if ult is not None: partes.append("+%.1f%% vs últ." % ((w["pun"]/ult - 1) * 100))
+            if med is not None: partes.append("+%.1f%% vs média" % ((w["pun"]/med - 1) * 100))
+            status = "DESCARTADO " + " / ".join(partes)
     else:
         status = ""
-    itens.append(dict(d=d, q=q, win=win, status=status, aceito=aceito, zerado=zerado, lim=lim,
+    itens.append(dict(d=d, q=q, win=win, status=status, aceito=aceito, zerado=zerado, lim_txt=lim_txt,
                       ult=ult, hist=hist, med=med, cx=cx,
                       ean=(nec_eans.get(d["Cód"]) or [""])[0]))
 
@@ -378,16 +380,16 @@ for i, it in enumerate(desc, start=2):
     dult = f"=I{i}/J{i}-1" if it["ult"] else None
     dmed = f"=I{i}/L{i}-1" if it["med"] else None
     wsD.append([it["d"]["Cód"], str(it["ean"]), it["d"]["Produto"], it["d"].get("Grupo"), it["cx"],
-                "SIM" if it["zerado"] else "NÃO", f"{int(it['lim']*100)}%", it["win"], w["pun"],
+                "SIM" if it["zerado"] else "NÃO", it["lim_txt"], it["win"], w["pun"],
                 it["ult"], it["hist"], it["med"], dult, dmed, w["obs"]])
 nD = len(desc) + 1
 style(wsD, [11,15,46,16,8,8,8,13,10,10,10,10,10,10,26], nD,
       money_cols=(9,10,11,12), int_cols=(5,), pct_cols=(13,14))
 for row in wsD.iter_rows(min_row=2, max_row=nD, min_col=2, max_col=2): row[0].number_format = "@"
 lgD = wsD.cell(row=nD+2, column=1,
-               value="Itens com cotação vencedora ACIMA do limite de reajuste (5% sobre a referência; 10% quando o item "
-                     "está zerado — Cobertura = 0 no Radar). Referência = última compra; sem ela, menor histórico. "
-                     "Ficam FORA dos pedidos-rascunho até renegociação ou nova cotação.")
+               value="Itens com cotação vencedora ACIMA do teto de reajuste: 4% sobre a última compra OU 6% sobre a "
+                     "média histórica (3/6/12m) — basta atender a um dos dois para ser aceito. "
+                     "Ficam FORA dos pedidos até renegociação ou nova cotação.")
 lgD.font = Font(name=F, italic=True, size=9)
 
 # ---------- Resumo ----------
@@ -404,7 +406,7 @@ geral = [
     ("Itens com ≥ 1 cotação", f'=COUNTIF(Controle!{cMF}2:{cMF}{nC},"<>SEM COTAÇÃO")'),
     ("Itens ainda sem cotação", f'=COUNTIF(Controle!{cMF}2:{cMF}{nC},"SEM COTAÇÃO")'),
     ("Itens OK (≤ menor hist. ou últ. compra)", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"OK*")'),
-    ("Reajuste aceito (até 5%; 10% se zerado)", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"REAJUSTE*")'),
+    ("Reajuste aceito (≤4% últ. ou ≤6% média)", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"REAJUSTE*")'),
     ("Descartados por preço (> limite)", f'=COUNTIF(Controle!{cST}2:{cST}{nC},"DESCARTADO*")'),
 ]
 r0 = 5
