@@ -34,10 +34,13 @@ for tag in PEDS:
              ["Total do pedido (inalterado)", f"R$ {tot:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")],
              ["Itens SEM ESTOQUE no painel novo", f"{len(sem_est)} (R$ {val_se:,.2f})".replace(",", "@").replace(".", ",").replace("@", ".")],
              ["", ""]]
-rows += [["CONCLUSÃO", "Os preços foram 100% mantidos nos 338 itens dos dois pedidos — nenhum subiu, nenhum caiu, "
+n_tot = len(L)
+se1 = sum(1 for x in L if x["pedido"] == PEDS[0] and x["obs_est"])
+se2 = sum(1 for x in L if x["pedido"] == PEDS[1] and x["obs_est"])
+rows += [["CONCLUSÃO", f"Os preços foram 100% mantidos nos {n_tot} itens dos dois pedidos — nenhum subiu, nenhum caiu, "
                        "nenhum saiu do catálogo. Pedidos podem seguir como estão."],
-         ["ATENÇÃO (estoque)", "O painel novo traz coluna de estoque (o CSV não trazia): 112 itens dos pedidos estão sem "
-                              "estoque informado no painel (62 no de medicamentos/críticos, 50 no de demais) — ver abas. "
+         ["ATENÇÃO (estoque)", f"O painel novo traz coluna de estoque (o CSV não trazia): {se1 + se2} itens dos pedidos estão sem "
+                              f"estoque informado no painel ({se1} no de medicamentos/críticos, {se2} no de demais) — ver abas. "
                               "Panpharma pode cortar esses itens no faturamento."]]
 for r in rows: wsr.append(r)
 wsr.column_dimensions["A"].width = 34; wsr.column_dimensions["B"].width = 95
