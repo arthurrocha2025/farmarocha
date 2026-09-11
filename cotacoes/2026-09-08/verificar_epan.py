@@ -66,7 +66,7 @@ for tag, fn in PEDIDOS:
         if r[0] is None or r[ix["Produto"]] in (None, "TOTAL"): continue
         if str(r[0]).startswith(("Pedido", "Cotação")): continue
         cod_forn = str(r[ix["Cód. forn."]]).strip() if r[ix["Cód. forn."]] not in (None, "") else None
-        ean = r[ix["EAN"]]
+        ean = r[ix.get("EAN", ix.get("EAN ePan (confirmado)"))]
         hit = by_cod.get(cod_forn) if cod_forn else None
         via = "cód"
         if hit is None:
