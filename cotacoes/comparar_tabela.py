@@ -3,6 +3,8 @@
 A comparação é feita por embalagem de compra: custo atual = Custo un x Un/Cx
 (ex.: display de Aspirina com 50 cartelas), quantidade = Caixas.
 Quando o produto tem mais de um EAN, vale o EAN com menor preço líquido.
+Só entram EANs com estoque no distribuidor; a economia considera
+o menor entre a quantidade pedida e o estoque.
 Diferença muito grande (preço < 50% ou > 200% do custo) costuma ser EAN de
 embalagem diferente e fica marcada para conferir, fora dos totais.
 
@@ -39,6 +41,8 @@ def monta(lista, csv):
     m = d[d["k"] != ""].merge(p, on="k", how="inner")
     m = m.merge(ctl[["cod", "Custo un", "Un/Cx"]], on="cod")
     m = m[m["COMPRA_AVISTA_7d"] > 0].copy()
+    com_preco = set(m["cod"])
+    m = m[m["ESTOQUE"] > 0]
     m["liq"] = m["COMPRA_AVISTA_7d"] * (1 - m["DESC_AVISTA_%"].fillna(0) / 100)
     m["r"] = m["liq"] / (m["Custo un"] * m["Un/Cx"])
     m["ok"] = m["r"].between(LIM_BAIXO, LIM_ALTO)
@@ -61,6 +65,8 @@ def monta(lista, csv):
                      est=None if pd.isna(b["ESTOQUE"]) else int(b["ESTOQUE"]))
             if not b["ok"]:
                 r["obs"] = "Conferir embalagem/EAN"
+        elif cod in com_preco:
+            r["obs"] = "Sem estoque"
         elif cod in achados:
             r["obs"] = "Sem preço"
         else:
@@ -83,7 +89,7 @@ def gera(rows, nome, saida):
     ws["A1"] = f"COMPARATIVO DE PREÇOS — {nome}"
     ws["A1"].font = Font(name=F, size=16, bold=True, color=azul)
     ws["A2"] = ("Base: embalagem de compra (custo atual = Custo un × Un/Cx do controle). "
-                "Preço líquido = preço tabela à vista × (1 − desconto). Tabela sem ST informada (LIQ_COM_ST vazio).")
+                "Preço líquido = preço tabela à vista × (1 − desconto). Tabela sem ST informada (LIQ_COM_ST vazio). Só EANs com estoque > 0.")
     ws["A2"].font = Font(name=F, size=9, italic=True, color="595959")
 
     H = 13
@@ -91,13 +97,13 @@ def gera(rows, nome, saida):
     rng = lambda col: f"{col}{ini}:{col}{fim}"
     resumo = [
         ("Produtos na lista", f"=COUNTA({rng('A')})", "0"),
-        ("Com preço comparável", f'=COUNTIFS({rng("M")},"<>",{rng("R")},"")', "0"),
+        ("Com preço e estoque (comparáveis)", f'=COUNTIFS({rng("M")},"<>",{rng("R")},"")', "0"),
         ("  • mais baratos que o custo atual", f'=COUNTIF({rng("Q")},"Mais barato")', "0"),
         ("  • mais caros que o custo atual", f'=COUNTIF({rng("Q")},"Mais caro")', "0"),
-        ("Conferir embalagem / sem preço / não encontrado",
-         f'=COUNTIF({rng("R")},"Conferir*")&" / "&COUNTIF({rng("R")},"Sem preço")&" / "&COUNTIF({rng("R")},"Não encontrado")', "@"),
-        ("Economia potencial comprando só os mais baratos (R$)", f'=SUMIF({rng("P")},">0")', moeda),
-        ("Saldo se comprar todos os comparáveis aqui (R$)", f"=SUM({rng('P')})", moeda),
+        ("Sem estoque / conferir embalagem / sem preço / não encontrado",
+         f'=COUNTIF({rng("R")},"Sem estoque")&" / "&COUNTIF({rng("R")},"Conferir*")&" / "&COUNTIF({rng("R")},"Sem preço")&" / "&COUNTIF({rng("R")},"Não encontrado")', "@"),
+        ("Economia potencial comprando só os mais baratos, limitado ao estoque (R$)", f'=SUMIF({rng("P")},">0")', moeda),
+        ("Saldo se comprar todos os comparáveis aqui, limitado ao estoque (R$)", f"=SUM({rng('P')})", moeda),
     ]
     for i, (lbl, f, fmt) in enumerate(resumo, start=4):
         ws[f"A{i}"] = lbl
@@ -126,7 +132,7 @@ def gera(rows, nome, saida):
                 r["ean"], r["desc"], r["tab"], r["descp"],
                 f'=IF(K{n}="","",ROUND(K{n}*(1-L{n}),2))', r["est"],
                 f'=IF(OR(M{n}="",R{n}<>""),"",M{n}/G{n}-1)',
-                f'=IF(OR(M{n}="",R{n}<>""),"",(G{n}-M{n})*E{n})',
+                f'=IF(OR(M{n}="",R{n}<>""),"",(G{n}-M{n})*MIN(E{n},N{n}))',
                 f'=IF(R{n}<>"","—",IF(M{n}<G{n},"Mais barato",IF(M{n}>G{n},"Mais caro","Igual")))',
                 r["obs"] or None]
         for j, v in enumerate(vals, start=1):
