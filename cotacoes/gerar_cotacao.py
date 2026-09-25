@@ -47,7 +47,7 @@ def carrega(caminho):
                 "ean": e,
                 "produto": str(r["Produto"]).strip(),
                 "fabricante": "" if pd.isna(r["Fabricante"]) else str(r["Fabricante"]).strip(),
-                "qtde": int(r["Un. compradas"]),
+                "qtde": int(r["Caixas"]),
             })
     linhas.sort(key=lambda x: (x["produto"], x["cod"]))
     return linhas, len(df)
@@ -91,7 +91,7 @@ def gera(linhas, n_produtos, saida):
 
     instr = [
         "COMO PREENCHER:  preencha somente as células AMARELAS (dados acima e colunas G, H e I da tabela).",
-        "• Cada linha é um EAN. Informe o PREÇO UNITÁRIO LÍQUIDO (já com desconto e impostos/ST), por unidade. Ex.: 12,34",
+        "• Cada linha é um EAN. Informe o PREÇO LÍQUIDO (já com desconto e impostos/ST) da embalagem que o EAN representa (caixa, display etc.). Ex.: 12,34",
         "• Sem o item ou sem estoque: deixe o preço em branco. Estoque parcial: informe a quantidade disponível na coluna H.",
         "• Não altere, exclua nem reordene linhas e colunas. Devolva este mesmo arquivo em Excel (.xlsx).",
     ]
@@ -101,8 +101,8 @@ def gera(linhas, n_produtos, saida):
 
     # ---- Tabela
     H = 14
-    cab = ["Item", "Cód. Rocha", "EAN", "Produto", "Fabricante", "Qtde (un)",
-           "Preço unit. líquido (R$)", "Qtde disponível (un)", "Observação",
+    cab = ["Item", "Cód. Rocha", "EAN", "Produto", "Fabricante", "Qtde (emb.)",
+           "Preço líquido por emb. (R$)", "Qtde disponível (emb.)", "Observação",
            "Total (R$)"]
     larg = [7, 11, 16, 52, 22, 10, 16, 13, 28, 14]
     for j, (t, w) in enumerate(zip(cab, larg), start=1):
@@ -157,9 +157,9 @@ def gera(linhas, n_produtos, saida):
     # Validação: preço e disponível devem ser números >= 0
     dv_p = DataValidation(type="decimal", operator="greaterThanOrEqual", formula1="0",
                           errorTitle="Valor inválido",
-                          error="Informe apenas o preço unitário em número (ex.: 12,34).")
+                          error="Informe apenas o preço em número (ex.: 12,34).")
     dv_q = DataValidation(type="whole", operator="greaterThanOrEqual", formula1="0",
-                          errorTitle="Valor inválido", error="Informe a quantidade em unidades inteiras.")
+                          errorTitle="Valor inválido", error="Informe a quantidade em número inteiro de embalagens.")
     ws.add_data_validation(dv_p)
     ws.add_data_validation(dv_q)
     dv_p.add(f"G{ini}:G{fim}")
