@@ -45,3 +45,28 @@ python3 pedidos/montar_pedido_compre_mais.py Lista_de_Compra.xlsx COMPRE_MAIS_PA
 ```
 Mantenha o `historico_pedidos.csv` no repositório: é ele que impede a repetição.
 Rodar de novo com o mesmo nome de saída substitui o registro daquele pedido (não duplica).
+
+## Pedido PROMO REDE (PA) — 30/09/2026 — com 5% de desconto adicional
+
+Arquivos:
+- `Pedido_PROMO_REDE_20260930.xlsx`: análise (Resumo, Pedido, Já pedidos, Conferir, Comparativo).
+- `Pedido_PROMO_REDE_20260930_envio.xlsx`: **pedido para envio** (CODPROD, EAN, DESCRICAO, QTD,
+  PRECO_FINAL, PRECO_-5%, TOTAL).
+
+Gerado por `montar_pedido_promo_rede.py`, com as mesmas regras do Compre Mais, mais:
+- Preço considerado = `PRECO_FINAL × 0,95` (desconto adicional de 5%, ajustável com `--desconto`).
+- Itens já pedidos ao Compre Mais hoje ficam fora (aba **Já pedidos**) e os itens deste pedido
+  entram no `historico_pedidos.csv`.
+- Itens com preço unitário abaixo de 35% da última compra vão para a aba **Conferir**
+  (provável divergência de fração) e não entram no pedido.
+
+| | Itens | Caixas | Valor |
+|---|---|---|---|
+| Tabela (sem desconto) | 159 | 1.018 | R$ 10.913,67 |
+| **Pedido com −5%** | **159** | **1.018** | **R$ 10.367,62** |
+| Pela última compra | | | R$ 11.901,69 |
+| **Economia** | | | **R$ 1.534,07** |
+
+```bash
+python3 pedidos/montar_pedido_promo_rede.py Lista_de_Compra.xlsx PROMO_REDE_PA.xls pedidos/Pedido_PROMO_REDE_AAAAMMDD.xlsx [--desconto 5] [--dias 30]
+```
