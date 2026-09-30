@@ -1,8 +1,10 @@
-"""Gera as duas planilhas finais:
+"""Gera:
 
-1. Controle_Compras_AAAAMMDD.xlsx — Resumo, tabela de preços de cada distribuidor
-   (com o que foi comprado marcado), Comprados e Pendências.
-2. Pedido_AAAAMMDD.xlsx — pedido de cada distribuidor, pronto para envio.
+1. Controle_Compras.xlsx — nossa planilha de controle (acumula todos os pedidos):
+   Resumo por pedido, Comprados (registro que impede repetir itens), Pendências
+   e a tabela de preços de cada distribuidor com o que foi comprado destacado.
+2. Um arquivo por distribuidor para enviar a eles:
+   Pedido_COMPRE_MAIS_AAAAMMDD.xlsx (uma aba por filial) e Pedido_PROMO_REDE_AAAAMMDD.xlsx.
 
 Uso: python3 gerar_planilhas.py LISTA.xlsx COMPRE_MAIS.xlsx PROMO_REDE.xls [--desconto 5] [--data AAAAMMDD]
 """
@@ -47,6 +49,12 @@ def formatar(w, destacar=None):
                     c.font = NEGRITO
 
 
+def agrupar(env, cod, qtd, total):
+    """Junta linhas do mesmo produto do distribuidor (cadastro duplicado na nossa lista)."""
+    outras = [c for c in env.columns if c not in (qtd, total)]
+    return env.groupby(outras, as_index=False, sort=False)[[qtd, total]].sum()[list(env.columns)]
+
+
 def com_total(df, qtd, total):
     t = {c: None for c in df.columns}
     t[df.columns[2]] = "TOTAL"
@@ -56,11 +64,13 @@ def com_total(df, qtd, total):
 
 
 def main(lista, cm_path, promo_path, desconto, data):
+    data_iso = dt.datetime.strptime(data, "%Y%m%d").date().isoformat()
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         cm.main(lista, cm_path, tmp / f"Pedido_COMPRE_MAIS_{data}.xlsx")
-        pr.main(lista, promo_path, tmp / f"Pedido_PROMO_REDE_{data}.xlsx", desconto)
         a_cm = pd.read_excel(tmp / f"Pedido_COMPRE_MAIS_{data}.xlsx", sheet_name=None)
+        pr.main(lista, promo_path, tmp / f"Pedido_PROMO_REDE_{data}.xlsx", desconto,
+                bloquear=a_cm["Pedido"]["Cód. interno"].unique())
         a_pr = pd.read_excel(tmp / f"Pedido_PROMO_REDE_{data}.xlsx", sheet_name=None)
 
     # ---------- Tabelas de preços com o que foi comprado ----------
@@ -74,7 +84,8 @@ def main(lista, cm_path, promo_path, desconto, data):
         c["ean"] = c["EAN"].map(cm.norm_ean)
         c = c.drop_duplicates("ean")[["ean", "Cód. interno", "Produto", "Un/Cx", "Preço CM (un)",
                                       "Últ. compra (un)", "Situação"]]
-        p = ped_cm[ped_cm["Filial CM"] == fil][["Cód. CM", "Qtd pedido (cx)", "Total CM", "Economia"]]
+        p = (ped_cm[ped_cm["Filial CM"] == fil].groupby("Cód. CM", as_index=False)
+             [["Qtd pedido (cx)", "Total CM", "Economia"]].sum())
         t = (t.merge(c, on="ean", how="left")
              .merge(p, left_on="COD_PROD", right_on="Cód. CM", how="left")
              .drop(columns=["ean", "Cód. CM"]))
@@ -89,7 +100,7 @@ def main(lista, cm_path, promo_path, desconto, data):
     c["ean"] = c["ean"].map(cm.norm_ean)
     c = c.drop_duplicates("ean")[["ean", "Cód. interno", "Produto", "Un/Cx", "Preço c/ desc (un)",
                                   "Últ. preço compra", "Situação"]]
-    p = a_pr["Pedido"][["Cód. PROMO", "Qtd pedido (cx)", "Total PROMO", "Economia"]]
+    p = a_pr["Pedido"].groupby("Cód. PROMO", as_index=False)[["Qtd pedido (cx)", "Total PROMO", "Economia"]].sum()
     t.insert(t.columns.get_loc("PRECO_FINAL") + 1, f"PRECO -{desconto:g}%",
              (t["PRECO_FINAL"] * (1 - desconto / 100)).round(2))
     t = (t.merge(c, on="ean", how="left")
@@ -110,17 +121,35 @@ def main(lista, cm_path, promo_path, desconto, data):
             f"Preço -{desconto:g}% (cx)": "Preço (cx)", f"Preço -{desconto:g}% (un)": "Preço (un)",
             "Total PROMO": "Total"}),
     ], ignore_index=True)
-    comprados = comprados[["Distribuidor", "Cód. distribuidor", "EAN", "Descrição distribuidor", "Cód. interno",
+    lst = pd.read_excel(lista, header=5, dtype={c: str for c in cm.EAN_COLS})
+    lst = lst[pd.to_numeric(lst["Cód. interno"], errors="coerce").notna()]
+    eans = {int(r["Cód. interno"]): "|".join(sorted({e for e in map(cm.norm_ean, r[cm.EAN_COLS]) if e}))
+            for _, r in lst.iterrows()}
+    comprados["Pedido"] = comprados["Distribuidor"].map(
+        lambda d: f"Pedido_COMPRE_MAIS_{data}" if d.startswith("COMPRE") else f"Pedido_PROMO_REDE_{data}")
+    comprados["Data pedido"] = data_iso
+    comprados["EANs"] = comprados["Cód. interno"].map(lambda c: eans.get(int(c), ""))
+    comprados = comprados[["Data pedido", "Pedido", "Distribuidor", "Cód. distribuidor", "EAN", "Descrição distribuidor", "Cód. interno",
                            "Produto (lista)", "Un/Cx", "Qtd pedido (cx)", "Preço (cx)", "Preço (un)",
                            "Últ. compra (un)", "Total", "Total pela últ. compra", "Economia",
-                           "Fornecedor anterior", "Obs"]]
+                           "Fornecedor anterior", "Obs", "EANs"]]
 
-    # ---------- Resumo ----------
-    res = (comprados.groupby("Distribuidor", sort=False)
+    # Acumula com os pedidos anteriores do controle (refazer o mesmo pedido substitui)
+    anteriores = pd.DataFrame()
+    if cm.CONTROLE.exists():
+        anteriores = pd.read_excel(cm.CONTROLE, sheet_name=cm.ABA_COMPRADOS)
+        anteriores = anteriores[~anteriores["Pedido"].isin(comprados["Pedido"].unique())]
+    todos = pd.concat([anteriores, comprados], ignore_index=True)
+    todos["Cód. interno"] = todos["Cód. interno"].astype(int)
+    for c in ["Qtd pedido (cx)", "Total", "Total pela últ. compra", "Economia"]:
+        todos[c] = pd.to_numeric(todos[c])
+
+    # ---------- Resumo (todos os pedidos) ----------
+    res = (todos.groupby(["Data pedido", "Distribuidor"], sort=False)
            .agg(Itens=("Cód. interno", "count"), Caixas=("Qtd pedido (cx)", "sum"),
                 **{"Valor do pedido": ("Total", "sum"), "Pela última compra": ("Total pela últ. compra", "sum"),
                    "Economia": ("Economia", "sum")}).reset_index())
-    res.loc[len(res)] = ["TOTAL", res["Itens"].sum(), res["Caixas"].sum(), res["Valor do pedido"].sum(),
+    res.loc[len(res)] = ["", "TOTAL", res["Itens"].sum(), res["Caixas"].sum(), res["Valor do pedido"].sum(),
                          res["Pela última compra"].sum(), res["Economia"].sum()]
     res = res.round(2)
     res["Obs"] = ""
@@ -140,36 +169,53 @@ def main(lista, cm_path, promo_path, desconto, data):
             pend.append({"Distribuidor": "PROMO REDE", "Cód. interno": r["Cód. interno"], "Produto": r["Produto"],
                          "Pendência": f"Conferir fração: Un/Cx {r['Un/Cx']}, últ. compra R$ {r['Últ. preço compra']:.2f}/un "
                                       f"x PROMO R$ {r['Preço c/ desc (un)']:.2f}/un — não pedido"})
-    pend = pd.DataFrame(pend)
+    pend = pd.DataFrame(pend, columns=["Distribuidor", "Cód. interno", "Produto", "Pendência"])
+    pend.insert(0, "Data pedido", data_iso)
+    if cm.CONTROLE.exists():
+        p_ant = pd.read_excel(cm.CONTROLE, sheet_name="Pendências")
+        pend = pd.concat([p_ant[p_ant["Data pedido"] != data_iso], pend], ignore_index=True)
 
-    controle = AQUI / f"Controle_Compras_{data}.xlsx"
+    controle = cm.CONTROLE
     with pd.ExcelWriter(controle, engine="openpyxl") as w:
         res.to_excel(w, sheet_name="Resumo", index=False)
+        todos.to_excel(w, sheet_name=cm.ABA_COMPRADOS, index=False)
+        pend.to_excel(w, sheet_name="Pendências", index=False)
         for nome, t in tabelas.items():
             t.to_excel(w, sheet_name=nome[:31], index=False)
-        comprados.to_excel(w, sheet_name="Comprados", index=False)
-        pend.to_excel(w, sheet_name="Pendências", index=False)
         formatar(w, destacar="COMPRADO (cx)")
 
-    # ---------- Pedido ----------
-    pedido = AQUI / f"Pedido_{data}.xlsx"
-    with pd.ExcelWriter(pedido, engine="openpyxl") as w:
-        for fil in cm.FILIAIS.values():
-            f = ped_cm[ped_cm["Filial CM"] == fil].sort_values("Descrição CM")
-            env = pd.DataFrame({"COD_PROD": f["Cód. CM"], "CODAUXILIAR": f["EAN CM"].astype(str),
-                                "DESCRICAO": f["Descrição CM"], "QTD": f["Qtd pedido (cx)"],
-                                "PRECO": f["Preço CM (cx)"], "TOTAL": f["Total CM"].round(2)})
-            com_total(env, "QTD", "TOTAL").to_excel(w, sheet_name=f"COMPRE MAIS {fil}", index=False)
+    # ---------- Um arquivo por distribuidor ----------
+    enviados = []
+    if len(ped_cm):
+        arq = AQUI / f"Pedido_COMPRE_MAIS_{data}.xlsx"
+        with pd.ExcelWriter(arq, engine="openpyxl") as w:
+            for fil in cm.FILIAIS.values():
+                f = ped_cm[ped_cm["Filial CM"] == fil].sort_values("Descrição CM")
+                if f.empty:
+                    continue
+                env = pd.DataFrame({"COD_PROD": f["Cód. CM"], "CODAUXILIAR": f["EAN CM"].astype(str),
+                                    "DESCRICAO": f["Descrição CM"], "QTD": f["Qtd pedido (cx)"],
+                                    "PRECO": f["Preço CM (cx)"], "TOTAL": f["Total CM"].round(2)})
+                env = agrupar(env, "COD_PROD", "QTD", "TOTAL")
+                com_total(env, "QTD", "TOTAL").to_excel(w, sheet_name=f"Filial {fil}", index=False)
+            formatar(w)
+        enviados.append(arq.name)
+    if len(a_pr["Pedido"]):
+        arq = AQUI / f"Pedido_PROMO_REDE_{data}.xlsx"
         f = a_pr["Pedido"].sort_values("Descrição PROMO")
         env = pd.DataFrame({"CODPROD": f["Cód. PROMO"], "EAN": f["EAN PROMO"].astype(str),
                             "DESCRICAO": f["Descrição PROMO"], "QTD": f["Qtd pedido (cx)"],
                             "PRECO_FINAL": f["Preço tabela (cx)"],
                             f"PRECO -{desconto:g}%": f[f"Preço -{desconto:g}% (cx)"],
                             "TOTAL": f["Total PROMO"].round(2)})
-        com_total(env, "QTD", "TOTAL").to_excel(w, sheet_name="PROMO REDE", index=False)
-        formatar(w)
+        env = agrupar(env, "CODPROD", "QTD", "TOTAL")
+        with pd.ExcelWriter(arq, engine="openpyxl") as w:
+            com_total(env, "QTD", "TOTAL").to_excel(w, sheet_name="Pedido", index=False)
+            formatar(w)
+        enviados.append(arq.name)
+    pedido = ", ".join(enviados) or "nenhum item novo para pedir"
 
-    print(f"\nGerados: {controle.name} e {pedido.name}")
+    print(f"\nControle: {controle.name} | Envio: {pedido}")
     print(res.to_string(index=False))
 
 

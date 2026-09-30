@@ -10,17 +10,16 @@ Regras:
 - Quantidade = coluna "Caixas", limitada ao estoque da PROMO REDE.
 - Itens com preço unitário abaixo de 35% da última compra vão para a aba "Conferir"
   (provável divergência de embalagem/fração) e não entram no pedido.
-- Não repete itens já pedidos (historico_pedidos.csv, últimos --dias).
+- Não repete itens já pedidos (aba "Comprados" do Controle_Compras.xlsx, últimos --dias).
 
 Uso: python3 montar_pedido_promo_rede.py LISTA.xlsx PROMO_REDE.xls SAIDA.xlsx [--desconto 5] [--dias 30]
 """
 import argparse
-import datetime as dt
 from pathlib import Path
 
 import pandas as pd
 
-from montar_pedido_compre_mais import (EAN_COLS, HISTORICO, bloqueados, carregar_historico,
+from montar_pedido_compre_mais import (EAN_COLS, bloqueados, carregar_historico,
                                        norm_ean)
 
 FORNECEDOR = "PROMO REDE PA"
@@ -39,7 +38,8 @@ def formatar(w):
                     c.number_format = "#,##0.00"
 
 
-def main(lista_path, promo_path, saida, desconto=5.0, dias=30):
+def main(lista_path, promo_path, saida, desconto=5.0, dias=30, bloquear=()):
+    """`bloquear`: códigos internos já pedidos nesta mesma rodada (ex.: Compre Mais)."""
     saida = Path(saida)
     pedido_id = saida.stem
     fator = 1 - desconto / 100
@@ -67,6 +67,7 @@ def main(lista_path, promo_path, saida, desconto=5.0, dias=30):
 
     hist = carregar_historico()
     h_rec, cods_bloq, eans_bloq = bloqueados(hist, pedido_id, dias)
+    cods_bloq |= {str(c) for c in bloquear}
     ja = m["Cód. interno"].map(
         lambda c: str(c) in cods_bloq or bool(lista_eans.get(c, set()) & eans_bloq))
 
@@ -115,8 +116,10 @@ def main(lista_path, promo_path, saida, desconto=5.0, dias=30):
             ult = h_rec.sort_values("Data pedido").drop_duplicates("Cód. interno", keep="last")
             jp = jp[["Cód. interno", "Produto", "Caixas", "Últ. preço compra", "Preço c/ desc (un)"]].copy()
             jp["Cód. interno"] = jp["Cód. interno"].astype(str)
-            jp.merge(ult[["Cód. interno", "Pedido", "Data pedido", "Fornecedor", "Qtd (cx)"]],
-                     on="Cód. interno", how="left").to_excel(w, sheet_name="Já pedidos", index=False)
+            jp = jp.merge(ult[["Cód. interno", "Pedido", "Data pedido", "Fornecedor", "Qtd (cx)"]],
+                          on="Cód. interno", how="left")
+            jp["Fornecedor"] = jp["Fornecedor"].fillna("pedido desta rodada")
+            jp.to_excel(w, sheet_name="Já pedidos", index=False)
         if conferir.any():
             m[conferir][["Cód. interno", "Produto", "DESCRICAO", "Un/Cx", "Caixas", "PRECO_FINAL",
                          "Preço c/ desc (cx)", "Preço c/ desc (un)", "Últ. preço compra"]].to_excel(
@@ -132,33 +135,6 @@ def main(lista_path, promo_path, saida, desconto=5.0, dias=30):
             w, sheet_name="Comparativo", index=False)
         formatar(w)
 
-    # Arquivo de envio
-    env = pd.DataFrame({"CODPROD": pedido["CODPROD"].astype(object), "EAN": pedido["EAN"],
-                        "DESCRICAO": pedido["DESCRICAO"], "QTD": pedido["Qtd pedido (cx)"],
-                        "PRECO_FINAL": pedido["PRECO_FINAL"],
-                        f"PRECO_-{desconto:g}%": pedido["Preço c/ desc (cx)"],
-                        "TOTAL": pedido["Total"].round(2)}).sort_values("DESCRICAO")
-    env = pd.concat([env, pd.DataFrame([{"DESCRICAO": "TOTAL", "QTD": env["QTD"].sum(),
-                                         "TOTAL": round(env["TOTAL"].sum(), 2)}])], ignore_index=True)
-    arq = saida.with_name(f"{saida.stem}_envio.xlsx")
-    with pd.ExcelWriter(arq, engine="openpyxl") as w:
-        env.to_excel(w, sheet_name="Pedido PROMO REDE", index=False)
-        formatar(w)
-    print(f"Arquivo de envio: {arq.name}")
-
-    novos = pd.DataFrame({
-        "Pedido": pedido_id, "Data pedido": dt.date.today().isoformat(), "Fornecedor": FORNECEDOR,
-        "Filial": "", "Cód. CM": pedido["CODPROD"].astype(str), "EAN CM": pedido["EAN"],
-        "Descrição CM": pedido["DESCRICAO"], "Cód. interno": pedido["Cód. interno"].astype(str),
-        "Produto": pedido["Produto"],
-        "EANs": pedido["Cód. interno"].map(lambda c: "|".join(sorted(lista_eans.get(c, set())))),
-        "Qtd (cx)": pedido["Qtd pedido (cx)"].astype(str),
-        "Preço (cx)": pedido["Preço c/ desc (cx)"].map("{:.2f}".format),
-        "Total": pedido["Total"].map("{:.2f}".format),
-    })
-    hist = pd.concat([hist[hist["Pedido"] != pedido_id], novos], ignore_index=True)
-    hist.to_csv(HISTORICO, sep=";", index=False)
-    print(f"Histórico atualizado: {len(novos)} linhas do pedido {pedido_id} em {HISTORICO.name}")
     for linha in resumo:
         print(f"{linha[0]}: {linha[1]}")
 

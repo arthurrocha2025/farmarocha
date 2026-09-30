@@ -1,11 +1,17 @@
 # Pedidos
 
-Cada rodada gera **só duas planilhas**:
+## O que é gerado
 
-| Planilha | O que tem |
-|---|---|
-| `Controle_Compras_AAAAMMDD.xlsx` | **Resumo** (valor e economia por distribuidor) · uma aba com a **tabela de preços de cada distribuidor**, com o que foi comprado destacado em verde · **Comprados** · **Pendências** (faltas de estoque e itens a conferir) |
-| `Pedido_AAAAMMDD.xlsx` | Uma aba por distribuidor, pronta para envio (código, EAN, descrição, quantidade em caixas, preço e total) |
+**1. `Controle_Compras.xlsx` — nossa planilha de controle (fica com a gente)**
+Acumula todos os pedidos, rodada após rodada:
+- **Resumo:** valor, caixas e economia por data e distribuidor.
+- **Comprados:** tudo o que já foi pedido. É por esta aba que o script sabe o que já foi comprado e não repete o item nas próximas planilhas (30 dias).
+- **Pendências:** faltas de estoque no distribuidor e itens a conferir.
+- **Uma aba com a tabela de preços de cada distribuidor**, com o que foi comprado destacado em verde.
+
+**2. Um arquivo por distribuidor (para enviar a eles)**
+- `Pedido_COMPRE_MAIS_AAAAMMDD.xlsx`, com uma aba por filial (Marabá e Castanhal).
+- `Pedido_PROMO_REDE_AAAAMMDD.xlsx`
 
 ## Como gerar
 ```bash
@@ -15,9 +21,9 @@ python3 pedidos/gerar_planilhas.py Lista_de_Compra.xlsx COMPRE_MAIS_PA.xlsx PROM
 ## Regras
 - Cruzamento pelo EAN principal e pelos EANs adicionais da Lista de Compra.
 - Frações: preço da caixa ÷ Un/Cx, comparado com a última compra (por unidade).
-- Só entra no pedido o que estiver **mais barato que a última compra**; quantidade = coluna **Caixas**, limitada ao estoque do distribuidor.
+- Só entra no pedido o que estiver **mais barato que a última compra**. A quantidade é a coluna **Caixas**, limitada ao estoque do distribuidor.
 - PROMO REDE com **5% de desconto adicional** sobre o PRECO_FINAL.
-- Itens já pedidos nos últimos 30 dias não se repetem (`historico_pedidos.csv`, uso interno do script).
+- O que vai para o Compre Mais não entra de novo na PROMO REDE, e o que já está em **Comprados** não se repete.
 
 ## 30/09/2026
 | Distribuidor | Itens | Caixas | Pedido | Economia |
