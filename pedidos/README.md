@@ -1,72 +1,28 @@
 # Pedidos
 
-## Pedido COMPRE MAIS (PA) — 30/09/2026
+Cada rodada gera **só duas planilhas**:
 
-Arquivos:
-- `Pedido_COMPRE_MAIS_20260930.xlsx`: análise completa (resumo, pedido, comparativo).
-- `Pedido_COMPRE_MAIS_20260930_Maraba.xlsx` e `Pedido_COMPRE_MAIS_20260930_Castanhal.xlsx`: **pedidos para envio**
-  (COD_PROD, CODAUXILIAR, DESCRICAO, QTD em caixas, PVENDA, TOTAL).
-
-Tudo é gerado por `montar_pedido_compre_mais.py`
-a partir da *Lista de Compra* (30/09/2026 14:01) e da planilha *COMPRE MAIS PA* (filiais Marabá e Castanhal).
-
-### Regras aplicadas
-- Cruzamento pelo **EAN principal e pelos EANs adicionais 1 a 5** da Lista de Compra.
-- **Frações:** o Compre Mais vende a caixa fechada e a Lista registra o preço por unidade.
-  Preço comparável = `PVENDA ÷ Un/Cx`.
-- Entra no pedido **somente o que está mais barato que a última compra**.
-- Quantidade = coluna **Caixas**, respeitando `QTD_MIN` (múltiplo), `QTD_MAX` e o estoque do Compre Mais.
-- Escolhe a filial mais barata com estoque; se faltar, completa na outra filial (se também for mais barata).
-
-- **Não repete itens já pedidos:** cada pedido é registrado em `historico_pedidos.csv`.
-  Nas próximas planilhas, os produtos pedidos nos últimos 30 dias (reconhecidos pelo código interno
-  ou por qualquer EAN) ficam fora do pedido e aparecem na aba **Já pedidos**. O prazo muda com `--dias N`.
-
-### Pedido 30/09/2026
-| Filial | Itens | Caixas | Valor | Economia |
-|---|---|---|---|---|
-| Marabá | 47 | 515 | R$ 3.965,03 | R$ 511,92 |
-| Castanhal | 27 | 379 | R$ 2.349,07 | R$ 249,81 |
-| **Total** | **74 linhas (71 produtos)** | **894** | **R$ 6.314,10** | **R$ 761,72** |
-
-### Abas
-| Aba | Conteúdo |
+| Planilha | O que tem |
 |---|---|
-| Resumo | Totais, valor do pedido e economia |
-| Pedido | Pedido completo (as duas filiais) |
-| Pedido Marabá / Pedido Castanhal | Pedido separado por filial |
-| Já pedidos | Itens mais baratos que ficaram fora por já estarem em pedido recente |
-| Sem estoque CM | Itens mais baratos, mas sem estoque no Compre Mais |
-| Comparativo | Todos os itens cruzados, mais baratos ou não |
+| `Controle_Compras_AAAAMMDD.xlsx` | **Resumo** (valor e economia por distribuidor) · uma aba com a **tabela de preços de cada distribuidor**, com o que foi comprado destacado em verde · **Comprados** · **Pendências** (faltas de estoque e itens a conferir) |
+| `Pedido_AAAAMMDD.xlsx` | Uma aba por distribuidor, pronta para envio (código, EAN, descrição, quantidade em caixas, preço e total) |
 
-### Como gerar de novo
+## Como gerar
 ```bash
-python3 pedidos/montar_pedido_compre_mais.py Lista_de_Compra.xlsx COMPRE_MAIS_PA.xlsx pedidos/Pedido_COMPRE_MAIS_AAAAMMDD.xlsx [--dias 30]
+python3 pedidos/gerar_planilhas.py Lista_de_Compra.xlsx COMPRE_MAIS_PA.xlsx PROMO_REDE_PA.xls --desconto 5
 ```
-Mantenha o `historico_pedidos.csv` no repositório: é ele que impede a repetição.
-Rodar de novo com o mesmo nome de saída substitui o registro daquele pedido (não duplica).
 
-## Pedido PROMO REDE (PA) — 30/09/2026 — com 5% de desconto adicional
+## Regras
+- Cruzamento pelo EAN principal e pelos EANs adicionais da Lista de Compra.
+- Frações: preço da caixa ÷ Un/Cx, comparado com a última compra (por unidade).
+- Só entra no pedido o que estiver **mais barato que a última compra**; quantidade = coluna **Caixas**, limitada ao estoque do distribuidor.
+- PROMO REDE com **5% de desconto adicional** sobre o PRECO_FINAL.
+- Itens já pedidos nos últimos 30 dias não se repetem (`historico_pedidos.csv`, uso interno do script).
 
-Arquivos:
-- `Pedido_PROMO_REDE_20260930.xlsx`: análise (Resumo, Pedido, Já pedidos, Conferir, Comparativo).
-- `Pedido_PROMO_REDE_20260930_envio.xlsx`: **pedido para envio** (CODPROD, EAN, DESCRICAO, QTD,
-  PRECO_FINAL, PRECO_-5%, TOTAL).
-
-Gerado por `montar_pedido_promo_rede.py`, com as mesmas regras do Compre Mais, mais:
-- Preço considerado = `PRECO_FINAL × 0,95` (desconto adicional de 5%, ajustável com `--desconto`).
-- Itens já pedidos ao Compre Mais hoje ficam fora (aba **Já pedidos**) e os itens deste pedido
-  entram no `historico_pedidos.csv`.
-- Itens com preço unitário abaixo de 35% da última compra vão para a aba **Conferir**
-  (provável divergência de fração) e não entram no pedido.
-
-| | Itens | Caixas | Valor |
-|---|---|---|---|
-| Tabela (sem desconto) | 159 | 1.018 | R$ 10.913,67 |
-| **Pedido com −5%** | **159** | **1.018** | **R$ 10.367,62** |
-| Pela última compra | | | R$ 11.901,69 |
-| **Economia** | | | **R$ 1.534,07** |
-
-```bash
-python3 pedidos/montar_pedido_promo_rede.py Lista_de_Compra.xlsx PROMO_REDE_PA.xls pedidos/Pedido_PROMO_REDE_AAAAMMDD.xlsx [--desconto 5] [--dias 30]
-```
+## 30/09/2026
+| Distribuidor | Itens | Caixas | Pedido | Economia |
+|---|---|---|---|---|
+| COMPRE MAIS Marabá | 47 | 515 | R$ 3.965,03 | R$ 511,92 |
+| COMPRE MAIS Castanhal | 27 | 379 | R$ 2.349,07 | R$ 249,81 |
+| PROMO REDE (−5%) | 159 | 1.018 | R$ 10.367,62 | R$ 1.534,07 |
+| **Total** | **233** | **1.912** | **R$ 16.681,72** | **R$ 2.295,79** |
