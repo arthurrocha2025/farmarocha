@@ -8,13 +8,25 @@ Regras:
 - Quantidade pedida = coluna "Caixas" (respeitando QTD_MIN, QTD_MAX e estoque).
 - Entre as filiais (Marabá e Castanhal) escolhe a mais barata com estoque;
   se faltar estoque, completa na outra filial desde que também seja mais barata.
+- Não repete itens já pedidos: tudo o que entra no pedido é gravado em
+  historico_pedidos.csv, e os produtos pedidos nos últimos --dias (padrão 30),
+  identificados pelo código interno ou por qualquer EAN, ficam fora das próximas
+  planilhas (aba "Já pedidos"). Gerar de novo o mesmo pedido substitui o registro
+  dele, sem se bloquear.
+- Gera também um arquivo de envio por filial (SAIDA_Maraba.xlsx, SAIDA_Castanhal.xlsx).
 
-Uso: python3 montar_pedido_compre_mais.py LISTA.xlsx COMPRE_MAIS.xlsx SAIDA.xlsx
+Uso: python3 montar_pedido_compre_mais.py LISTA.xlsx COMPRE_MAIS.xlsx SAIDA.xlsx [--dias 30]
 """
+import argparse
+import datetime as dt
 import math
-import sys
+import unicodedata
+from pathlib import Path
 
 import pandas as pd
+
+HISTORICO = Path(__file__).with_name("historico_pedidos.csv")
+FORNECEDOR = "COMPRE MAIS PA"
 
 EAN_COLS = ["EAN princ."] + [f"EAN adic. {i}" for i in range(1, 6)]
 FILIAIS = {"MARABA": "Marabá", "CASTA": "Castanhal"}
@@ -45,6 +57,28 @@ def carregar(lista_path, cm_path):
     m["Economia un"] = m["Últ. preço compra"] - m["Preço CM un"]
     m["Mais barato"] = m["Economia un"] > 0.005
     return lista, m
+
+
+def carregar_historico():
+    if not HISTORICO.exists():
+        return pd.DataFrame(columns=["Pedido", "Data pedido", "Fornecedor", "Filial", "Cód. CM",
+                                     "EAN CM", "Descrição CM", "Cód. interno", "Produto", "EANs",
+                                     "Qtd (cx)", "Preço (cx)", "Total"])
+    return pd.read_csv(HISTORICO, sep=";", dtype=str)
+
+
+def bloqueados(hist, pedido_id, dias):
+    """Códigos internos e EANs pedidos nos últimos `dias` (exceto o próprio pedido)."""
+    h = hist[hist["Pedido"] != pedido_id]
+    limite = dt.date.today() - dt.timedelta(days=dias)
+    h = h[pd.to_datetime(h["Data pedido"]).dt.date >= limite]
+    cods = set(h["Cód. interno"].dropna())
+    eans = {e for v in h["EANs"].dropna() for e in v.split("|") if e}
+    return h, cods, eans
+
+
+def sem_acento(s):
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
 
 
 def alocar(m):
@@ -91,8 +125,21 @@ COLS_PEDIDO = {
 }
 
 
-def main(lista_path, cm_path, saida):
+def main(lista_path, cm_path, saida, dias=30):
+    saida = Path(saida)
+    pedido_id = saida.stem
     lista, m = carregar(lista_path, cm_path)
+
+    hist = carregar_historico()
+    h_rec, cods_bloq, eans_bloq = bloqueados(hist, pedido_id, dias)
+    eans_prod = (lista.set_index("Cód. interno")[EAN_COLS].apply(
+        lambda r: {e for e in map(norm_ean, r) if e}, axis=1))
+    lista_eans = eans_prod.to_dict()
+    ja = m["Cód. interno"].map(
+        lambda c: str(c) in cods_bloq or bool(lista_eans.get(c, set()) & eans_bloq))
+    ja_pedidos = m[ja & m["Mais barato"]].drop_duplicates("Cód. interno")
+    m = m[~ja]
+
     p = alocar(m)
     if "Obs" not in p:
         p["Obs"] = ""
@@ -107,7 +154,8 @@ def main(lista_path, cm_path, saida):
         ("Itens na Lista de Compra", len(lista)),
         ("Itens encontrados no Compre Mais (EAN princ. + adicionais)", m["Cód. interno"].nunique()),
         ("  - cruzados só por EAN adicional", m.groupby("Cód. interno")["EAN usado"].apply(lambda s: (s != "EAN princ.").all()).sum()),
-        ("Itens mais baratos que a última compra", m.loc[m["Mais barato"], "Cód. interno"].nunique()),
+        ("Itens mais baratos que a última compra", m.loc[m["Mais barato"], "Cód. interno"].nunique() + len(ja_pedidos)),
+        (f"  - já pedidos nos últimos {dias} dias (fora deste pedido)", len(ja_pedidos)),
         ("Itens no pedido", pedido["Cód. interno"].nunique()),
         ("Itens mais baratos mas sem estoque no CM", sem_est["Cód. interno"].nunique()),
         ("Caixas no pedido", int(pedido["Qtd pedido (cx)"].sum())),
@@ -127,6 +175,13 @@ def main(lista_path, cm_path, saida):
         ped.to_excel(w, sheet_name="Pedido", index=False)
         for fil in FILIAIS.values():
             ped[ped["Filial CM"] == fil].to_excel(w, sheet_name=f"Pedido {fil}", index=False)
+        if len(ja_pedidos):
+            ult = h_rec.sort_values("Data pedido").drop_duplicates("Cód. interno", keep="last")
+            jp = ja_pedidos[["Cód. interno", "Produto", "Caixas", "Últ. preço compra"]].copy()
+            jp["Cód. interno"] = jp["Cód. interno"].astype(str)
+            jp = jp.merge(ult[["Cód. interno", "Pedido", "Data pedido", "Filial", "Qtd (cx)"]],
+                          on="Cód. interno", how="left")
+            jp.to_excel(w, sheet_name="Já pedidos", index=False)
         if len(sem_est):
             sem_est[list(COLS_PEDIDO)].rename(columns=COLS_PEDIDO).to_excel(w, sheet_name="Sem estoque CM", index=False)
         comp[["Situação", "FILIAL_NOME", "Cód. interno", "Produto", "DESCRICAO", "EAN usado", "ean",
@@ -147,9 +202,54 @@ def main(lista_path, cm_path, saida):
                     if isinstance(c.value, float):
                         c.number_format = "#,##0.00"
 
+    # Arquivo de envio por filial
+    for fil in FILIAIS.values():
+        f = pedido[pedido["FILIAL_NOME"] == fil].sort_values("DESCRICAO")
+        if f.empty:
+            continue
+        env = pd.DataFrame({
+            "COD_PROD": f["COD_PROD"], "CODAUXILIAR": f["CODAUXILIAR"].astype(str),
+            "DESCRICAO": f["DESCRICAO"], "QTD": f["Qtd pedido (cx)"].astype(int),
+            "PVENDA": f["PVENDA"], "TOTAL": f["Total CM"].round(2)})
+        total = pd.DataFrame([{"DESCRICAO": "TOTAL", "QTD": env["QTD"].sum(),
+                               "TOTAL": round(env["TOTAL"].sum(), 2)}])
+        env = pd.concat([env.astype({"COD_PROD": object}), total], ignore_index=True)
+        arq = saida.with_name(f"{saida.stem}_{sem_acento(fil)}.xlsx")
+        with pd.ExcelWriter(arq, engine="openpyxl") as w:
+            env.to_excel(w, sheet_name=f"Pedido {fil}", index=False)
+            ws = w.book.active
+            for col, larg in zip("ABCDEF", (10, 16, 45, 8, 10, 12)):
+                ws.column_dimensions[col].width = larg
+            for row in ws.iter_rows(min_row=2, min_col=5, max_col=6):
+                for c in row:
+                    c.number_format = "#,##0.00"
+        print(f"Arquivo de envio: {arq.name}")
+
+    # Registra o pedido no histórico (substitui o registro anterior do mesmo pedido)
+    novos = pd.DataFrame({
+        "Pedido": pedido_id, "Data pedido": dt.date.today().isoformat(), "Fornecedor": FORNECEDOR,
+        "Filial": pedido["FILIAL_NOME"], "Cód. CM": pedido["COD_PROD"].astype(str),
+        "EAN CM": pedido["CODAUXILIAR"].astype(str), "Descrição CM": pedido["DESCRICAO"],
+        "Cód. interno": pedido["Cód. interno"].astype(str), "Produto": pedido["Produto"],
+        "EANs": pedido["Cód. interno"].map(lambda c: "|".join(sorted(lista_eans.get(c, set())))),
+        "Qtd (cx)": pedido["Qtd pedido (cx)"].astype(int).astype(str),
+        "Preço (cx)": pedido["PVENDA"].map("{:.2f}".format),
+        "Total": pedido["Total CM"].map("{:.2f}".format),
+    })
+    hist = pd.concat([hist[hist["Pedido"] != pedido_id], novos], ignore_index=True)
+    hist.to_csv(HISTORICO, sep=";", index=False)
+    print(f"Histórico atualizado: {len(novos)} linhas do pedido {pedido_id} em {HISTORICO.name}")
+
     for linha in resumo:
         print(f"{linha[0]}: {linha[1]}")
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:4])
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("lista")
+    ap.add_argument("compre_mais")
+    ap.add_argument("saida")
+    ap.add_argument("--dias", type=int, default=30,
+                    help="bloqueia itens pedidos nos últimos N dias (padrão 30)")
+    a = ap.parse_args()
+    main(a.lista, a.compre_mais, a.saida, a.dias)
