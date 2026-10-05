@@ -6,7 +6,9 @@ Entradas aceitas por distribuidor (NOME=arquivo):
   - a própria planilha COTACAO_<NOME> respondida: preço na coluna G (0 ou vazio
     = não tem), disponível na coluna H (vazio = atende tudo). Se o distribuidor
     acrescentou as colunas "PREÇO DE VENDA"/"DESCONTO"/"ESTOQUE - UNIDADES"
-    (Nazária), o preço é venda × (1 − desconto) e o estoque vem dessa coluna.
+    (Nazária), o preço é venda × (1 − desconto) e o estoque vem dessa coluna;
+  - planilha "cotacao" do portal da SB Log (cabeçalho com "Vl. Líquido"): só
+    traz os itens disponíveis; preço = Vl. Líquido.
 
 Panpharma e Nazária cobram 3,92% de imposto por fora: entra no preço.
 Só vale EAN com preço e estoque. Por produto e distribuidor vale o EAN mais
@@ -76,9 +78,29 @@ def le_resposta(caminho):
     return pd.DataFrame(rows).drop_duplicates("k")
 
 
+SEM_LIMITE = 10 ** 6  # distribuidor só informou que tem, sem quantidade
+
+
+def le_portal(ws, ini):
+    cab = {str(c.value).strip(): c.column - 1 for c in ws[ini] if c.value}
+    rows = []
+    for r in ws.iter_rows(min_row=ini + 1, values_only=True):
+        ean = str(r[cab["EAN"]] or "").strip().lstrip("0")
+        preco = pd.to_numeric(r[cab["Vl. Líquido"]], errors="coerce")
+        if ean and preco and preco > 0:
+            rows.append({"k": ean, "preco": float(preco), "disp": SEM_LIMITE, "obs": ""})
+    return pd.DataFrame(rows).drop_duplicates("k")
+
+
 def le(caminho):
-    nomes = openpyxl.load_workbook(caminho, read_only=True).sheetnames
-    return le_epan(caminho) if set(CNPJS) <= set(nomes) else le_resposta(caminho)
+    wb = openpyxl.load_workbook(caminho, data_only=True)
+    if set(CNPJS) <= set(wb.sheetnames):
+        return le_epan(caminho)
+    ws = wb.active
+    for r in range(1, 20):
+        if any(c.value == "Vl. Líquido" for c in ws[r]):
+            return le_portal(ws, r)
+    return le_resposta(caminho)
 
 
 def monta(lista, fontes):
@@ -194,7 +216,7 @@ def gera(prod, nomes, saida):
             p = r[f"{n}|preco"]
             disp = r[f"{n}|disp"]
             vals = [(r["cod"], None), (r[f"{n}|ean"], "@"), (r["produto"], None), (r["qtde"], None),
-                    (int(disp), None), (p, M), (round(p * min(r["qtde"], disp), 2), M), (r["custo"], M),
+                    (int(disp) if disp < SEM_LIMITE else None, None), (p, M), (round(p * min(r["qtde"], disp), 2), M), (r["custo"], M),
                     (p / r["custo"] - 1, "0.0%"), (r[f"{n}|obs"], None)]
             for j, (val, fmt) in enumerate(vals, start=1):
                 celula(wp, i, j, val, fmt, "FFCDD2" if j == 5 and disp < r["qtde"] else None)
