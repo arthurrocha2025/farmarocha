@@ -4,7 +4,9 @@ Entradas aceitas por distribuidor (NOME=arquivo):
   - tabela ePan PRO (Panpharma): abas "Farma Rocha" e "Drogaria Rocha"; preço
     líquido à vista = preço 7d − desc. %, o menor entre os dois CNPJs;
   - a própria planilha COTACAO_<NOME> respondida: preço na coluna G (0 ou vazio
-    = não tem), disponível na coluna H (vazio = atende tudo).
+    = não tem), disponível na coluna H (vazio = atende tudo). Se o distribuidor
+    acrescentou as colunas "PREÇO DE VENDA"/"DESCONTO"/"ESTOQUE - UNIDADES"
+    (Nazária), o preço é venda × (1 − desconto) e o estoque vem dessa coluna.
 
 Só vale EAN com preço e estoque. Por produto e distribuidor vale o EAN mais
 barato. Preço abaixo de 50% ou acima de 200% do custo atual (Custo un × Un/Cx)
@@ -47,15 +49,24 @@ def le_epan(caminho):
 
 def le_resposta(caminho):
     ws = openpyxl.load_workbook(caminho, data_only=True).active
-    ini = next(r for r in range(1, 40) if ws.cell(row=r, column=1).value == "Item") + 1
+    ini = next(r for r in range(1, 40) if ws.cell(row=r, column=1).value == "Item")
+    cab = {str(c.value).strip().upper(): c.column - 1 for c in ws[ini] if c.value}
+    extra = {"PREÇO DE VENDA", "DESCONTO", "ESTOQUE - UNIDADES"} <= set(cab)
     rows = []
-    for r in ws.iter_rows(min_row=ini, values_only=True):
+    for r in ws.iter_rows(min_row=ini + 1, values_only=True):
         if not isinstance(r[0], int):
             break
-        preco = pd.to_numeric(r[6], errors="coerce")
-        disp = pd.to_numeric(r[7], errors="coerce")
+        if extra:
+            venda = pd.to_numeric(r[cab["PREÇO DE VENDA"]], errors="coerce")
+            desc = pd.to_numeric(r[cab["DESCONTO"]], errors="coerce")
+            preco = round(venda * (1 - (0 if pd.isna(desc) else desc)), 2)
+            disp = pd.to_numeric(r[cab["ESTOQUE - UNIDADES"]], errors="coerce")
+            disp = 0 if pd.isna(disp) else disp
+        else:
+            preco = pd.to_numeric(r[6], errors="coerce")
+            disp = pd.to_numeric(r[7], errors="coerce")
         rows.append({"k": str(r[2] or "").strip().lstrip("0"),
-                     "preco": preco if preco and preco > 0 else None,
+                     "preco": preco if preco and preco > 0 else None,  # NaN > 0 é False
                      "disp": r[5] if pd.isna(disp) else disp, "obs": r[8] or ""})
     return pd.DataFrame(rows).drop_duplicates("k")
 
