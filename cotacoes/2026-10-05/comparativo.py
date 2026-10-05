@@ -8,9 +8,12 @@ Entradas aceitas por distribuidor (NOME=arquivo):
     acrescentou as colunas "PREÇO DE VENDA"/"DESCONTO"/"ESTOQUE - UNIDADES"
     (Nazária), o preço é venda × (1 − desconto) e o estoque vem dessa coluna.
 
+Panpharma e Nazária cobram 3,92% de imposto por fora: entra no preço.
 Só vale EAN com preço e estoque. Por produto e distribuidor vale o EAN mais
 barato. Preço abaixo de 50% ou acima de 200% do custo atual (Custo un × Un/Cx)
 costuma ser embalagem diferente: fica marcado para conferir e não concorre.
+Teto por produto = maior preço entre última compra, custo atual e melhores
+3/6/12 meses (× Un/Cx): preço acima do teto não concorre (não compramos).
 Vencedor = menor preço entre os que concorrem.
 
 Uso: python comparativo.py <Lista_de_Compra.xlsx> NOME=arquivo [NOME=arquivo ...] [-o saida.xlsx]
@@ -27,6 +30,8 @@ from gerar_cotacao import carrega
 
 LIM_BAIXO, LIM_ALTO = 0.5, 2.0
 CNPJS = ["Farma Rocha", "Drogaria Rocha"]
+IMPOSTO = {"PANPHARMA": 0.0392, "NAZARIA": 0.0392}
+HIST = ["Últ. preço compra", "Custo un", "Melhor 3m", "Melhor 6m", "Melhor 12m"]
 
 
 def le_epan(caminho):
@@ -83,28 +88,34 @@ def monta(lista, fontes):
     ctl = ctl[pd.to_numeric(ctl["Cód. interno"], errors="coerce").notna()].copy()
     ctl["cod"] = ctl["Cód. interno"].astype(int)
     ctl["custo"] = (ctl["Custo un"] * ctl["Un/Cx"]).round(2)
+    ctl["teto"] = (ctl[HIST].apply(pd.to_numeric, errors="coerce").max(axis=1) * ctl["Un/Cx"]).round(2)
     prod = (d.drop_duplicates("cod")[["cod", "produto", "qtde"]]
-            .merge(ctl[["cod", "Grupo", "ABC", "Fornecedor", "Un/Cx", "custo"]], on="cod"))
+            .merge(ctl[["cod", "Grupo", "ABC", "Fornecedor", "Un/Cx", "custo", "teto"]], on="cod"))
 
     for nome, arq in fontes:
-        t = d[d["k"] != ""].merge(le(arq), on="k")
-        t = t[t["preco"].notna() & (t["disp"] > 0)].merge(prod[["cod", "custo"]], on="cod")
-        t["ok"] = (t["preco"] / t["custo"]).between(LIM_BAIXO, LIM_ALTO)
-        t = t.sort_values(["cod", "ok", "preco"], ascending=[True, False, True]).drop_duplicates("cod")
-        t = t.rename(columns={"preco": f"{nome}|preco", "disp": f"{nome}|disp", "ean": f"{nome}|ean",
-                              "ok": f"{nome}|ok", "obs": f"{nome}|obs"})
+        x = le(arq)
+        x["preco"] = (x["preco"] * (1 + IMPOSTO.get(nome, 0))).round(2)
+        t = d[d["k"] != ""].merge(x, on="k")
+        t = t[t["preco"].notna() & (t["disp"] > 0)].merge(prod[["cod", "custo", "teto"]], on="cod")
+        t["emb"] = (t["preco"] / t["custo"]).between(LIM_BAIXO, LIM_ALTO)
+        t["teto_ok"] = t["preco"] <= t["teto"] + 0.005
+        t["ok"] = t["emb"] & t["teto_ok"]
+        t = t.sort_values(["cod", "ok", "emb", "preco"], ascending=[True, False, False, True]).drop_duplicates("cod")
+        t = t.rename(columns={c: f"{nome}|{c}" for c in ["preco", "disp", "ean", "ok", "emb", "obs"]})
         prod = prod.merge(t[["cod"] + [c for c in t.columns if c.startswith(nome + "|")]], on="cod", how="left")
-        prod[f"{nome}|ok"] = prod[f"{nome}|ok"].fillna(False).astype(bool)
+        for c in ("ok", "emb"):
+            prod[f"{nome}|{c}"] = prod[f"{nome}|{c}"].fillna(False).astype(bool)
 
     nomes = [n for n, _ in fontes]
-    prod["venc"], prod["vpreco"], prod["conferir"] = "", None, ""
+    prod["venc"], prod["vpreco"], prod["conferir"], prod["acima"] = "", None, "", ""
     for i, r in prod.iterrows():
         cands = [(r[f"{n}|preco"], n) for n in nomes if r[f"{n}|ok"]]
         if cands:
             p, n = min(cands)
             prod.at[i, "venc"], prod.at[i, "vpreco"] = n, p
         prod.at[i, "conferir"] = ", ".join(n for n in nomes
-                                          if pd.notna(r[f"{n}|preco"]) and not r[f"{n}|ok"])
+                                          if pd.notna(r[f"{n}|preco"]) and not r[f"{n}|emb"])
+        prod.at[i, "acima"] = ", ".join(n for n in nomes if r[f"{n}|emb"] and not r[f"{n}|ok"])
     return prod.sort_values("produto"), nomes
 
 
@@ -145,20 +156,24 @@ def gera(prod, nomes, saida):
 
     # ---- Comparativo
     ws = wb.create_sheet("Comparativo")
-    cab = ["Cód. Rocha", "Produto", "Grupo", "ABC", "Forn. atual", "Qtde (emb.)", "Custo atual (emb.)"]
-    cab += nomes + ["Vencedor", "Melhor preço", "Dif. % vs custo", "Total vencedor", "Economia", "Conferir emb./EAN"]
-    cabecalho(ws, cab, [10, 44, 14, 5, 24, 8, 11] + [12] * len(nomes) + [13, 11, 9, 12, 11, 20])
+    cab = ["Cód. Rocha", "Produto", "Grupo", "ABC", "Forn. atual", "Qtde (emb.)", "Custo atual (emb.)",
+           "Teto (emb.)"]
+    cab += [f"{n} (c/ imposto)" if n in IMPOSTO else n for n in nomes]
+    cab += ["Vencedor", "Melhor preço", "Dif. % vs custo", "Total vencedor", "Economia", "Conferir emb./EAN",
+            "Acima do teto"]
+    cabecalho(ws, cab, [10, 44, 14, 5, 24, 8, 11, 11] + [12] * len(nomes) + [13, 11, 9, 12, 11, 20, 20])
     for i, (_, r) in enumerate(prod.iterrows(), start=2):
-        vals = [r["cod"], r["produto"], r["Grupo"], r["ABC"], r["Fornecedor"], r["qtde"], r["custo"]]
+        vals = [r["cod"], r["produto"], r["Grupo"], r["ABC"], r["Fornecedor"], r["qtde"], r["custo"], r["teto"]]
         for j, v in enumerate(vals, start=1):
-            celula(ws, i, j, v, M if j == 7 else None)
-        for j, n in enumerate(nomes, start=8):
+            celula(ws, i, j, v, M if j in (7, 8) else None)
+        for j, n in enumerate(nomes, start=9):
             p = r[f"{n}|preco"]
             fill = None
             if pd.notna(p):
-                fill = "C8E6C9" if n == r["venc"] else (None if r[f"{n}|ok"] else "FFF59D")
+                fill = ("C8E6C9" if n == r["venc"] else None if r[f"{n}|ok"]
+                        else "FFF59D" if not r[f"{n}|emb"] else "FFCDD2")
             celula(ws, i, j, p, M, fill, bold=(n == r["venc"]))
-        j = 8 + len(nomes)
+        j = 9 + len(nomes)
         v = r["vpreco"]
         celula(ws, i, j, r["venc"] or "Sem cotação", fill=None if r["venc"] else "FFCDD2")
         celula(ws, i, j + 1, v, M)
@@ -166,6 +181,7 @@ def gera(prod, nomes, saida):
         celula(ws, i, j + 3, round(v * r["qtde"], 2) if v else None, M)
         celula(ws, i, j + 4, round((r["custo"] - v) * r["qtde"], 2) if v else None, M)
         celula(ws, i, j + 5, r["conferir"], fill="FFF59D" if r["conferir"] else None)
+        celula(ws, i, j + 6, r["acima"], fill="FFCDD2" if r["acima"] else None)
     ws.auto_filter.ref = f"A1:{ws.cell(row=1, column=len(cab)).column_letter}{len(prod) + 1}"
 
     # ---- Pedido por distribuidor
@@ -190,10 +206,13 @@ def gera(prod, nomes, saida):
     sc = prod[prod["venc"] == ""]
     wz = wb.create_sheet("Sem cotação")
     cabecalho(wz, ["Cód. Rocha", "Produto", "Grupo", "Forn. atual", "Qtde (emb.)", "Custo atual (emb.)",
-                   "Cotado só c/ emb. a conferir"], [10, 44, 14, 26, 8, 11, 24], "C62828")
+                   "Teto (emb.)", "Acima do teto", "Menor preço acima do teto", "Cotado só c/ emb. a conferir"],
+              [10, 44, 14, 26, 8, 11, 11, 20, 12, 24], "C62828")
     for i, (_, r) in enumerate(sc.iterrows(), start=2):
         for j, (val, fmt) in enumerate([(r["cod"], None), (r["produto"], None), (r["Grupo"], None),
                                         (r["Fornecedor"], None), (r["qtde"], None), (r["custo"], M),
+                                        (r["teto"], M), (r["acima"], None),
+                                        (min((r[f"{n}|preco"] for n in nomes if r[f"{n}|emb"]), default=None), M),
                                         (r["conferir"], None)], start=1):
             celula(wz, i, j, val, fmt)
 
@@ -207,7 +226,9 @@ def gera(prod, nomes, saida):
         v = prod[prod["venc"] == n]
         tot = sum(r[f"{n}|preco"] * min(r["qtde"], r[f"{n}|disp"]) for _, r in v.iterrows())
         linhas.append((n, int(prod[f"{n}|preco"].notna().sum()), len(v), round(tot, 2)))
-    linhas.append(("Sem cotação", None, int((prod["venc"] == "").sum()), None))
+    sem = prod["venc"] == ""
+    linhas.append(("Sem cotação", None, int(sem.sum()), None))
+    linhas.append(("  dos quais só por estar acima do teto", None, int((sem & (prod["acima"] != "")).sum()), None))
     w = prod[prod["venc"] != ""]
     cur, tot = (w["custo"] * w["qtde"]).sum(), (w["vpreco"] * w["qtde"]).sum()
     linhas += [(None, None, None, None),
@@ -215,7 +236,10 @@ def gera(prod, nomes, saida):
                ("Itens com vencedor pelo melhor preço (R$)", None, None, round(tot, 2)),
                ("Diferença (R$)", None, None, round(cur - tot, 2)),
                ("Itens vencedores mais caros que o custo atual", None, int((w["vpreco"] > w["custo"]).sum()), None),
-               ("Itens com embalagem/EAN a conferir", None, int((prod["conferir"] != "").sum()), None)]
+               ("Itens com embalagem/EAN a conferir", None, int((prod["conferir"] != "").sum()), None),
+               (None, None, None, None),
+               ("Panpharma e Nazária com +3,92% de imposto. Teto = maior entre última compra, custo e "
+                "melhores 3/6/12m.", None, None, None)]
     for i, row in enumerate(linhas, start=1):
         for j, v in enumerate(row, start=1):
             if v is None:
