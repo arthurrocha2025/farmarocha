@@ -4,7 +4,7 @@ Cada EAN (principal ou adicional) vira uma linha própria: alguns distribuidores
 ignoram as colunas de EAN adicional, então cada um cota pelo EAN que tiver
 cadastrado. Itens com OL ficam de fora (são comprados direto do laboratório).
 
-Uso: python gerar_cotacao.py <Lista_de_Compra.xlsx> [pasta_saida]
+Uso: python gerar_cotacao.py <Lista_de_Compra.xlsx> [pasta_saida (padrão: envio/)]
 """
 import sys
 from pathlib import Path
@@ -193,7 +193,8 @@ DISTRIBUIDORAS = ["PANPHARMA", "NAZARIA", "SBLOG", "TAPAJOS"]
 
 if __name__ == "__main__":
     origem = sys.argv[1]
-    pasta = Path(sys.argv[2] if len(sys.argv) > 2 else ".")
+    pasta = Path(sys.argv[2] if len(sys.argv) > 2 else Path(__file__).resolve().parent / "envio")
+    pasta.mkdir(parents=True, exist_ok=True)
     linhas, n = carrega(origem)
     for d in DISTRIBUIDORAS:
         gera(linhas, n, pasta / f"COTACAO_{d}_{date.today():%d-%m-%Y}.xlsx", d)
