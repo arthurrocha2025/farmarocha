@@ -27,6 +27,10 @@ AAAA-MM-DD/
 5. **Embalagem:** preço abaixo de 50% ou acima de 200% do custo atual é tratado
    como embalagem/EAN diferente: fica marcado para conferir e não concorre.
 6. **Vencedor** = menor preço entre os que passam nas regras, com estoque.
+7. **Campanha de OL** (PDF do laboratório/distribuidor, ex.: Painel O.L Procter):
+   `ol_campanha.py` gera o pedido com quantidade para **60 dias** de estoque
+   (2 × Dem./mês − Est. rede, arredondado para a embalagem da oferta), respeitando
+   o teto. O que for comprado na campanha sai dos pedidos de distribuidor.
 
 ## Passo a passo
 
@@ -37,6 +41,8 @@ python gerar_cotacao.py respostas/Lista_de_Compra_*.xlsx
 python pedidos.py respostas/Lista_de_Compra_*.xlsx -d DD-MM-AAAA
 # 2) com as respostas em respostas/
 python comparativo.py respostas/Lista_de_Compra_*.xlsx PANPHARMA=respostas/... NAZARIA=... SBLOG=... TAPAJOS=...
+# 3) campanha de OL (antes de gerar os pedidos de distribuidor)
+python ol_campanha.py respostas/Lista_de_Compra_*.xlsx respostas/campanhas/<campanha>.pdf PROCTER -d DD-MM-AAAA
 python pedidos.py     respostas/Lista_de_Compra_*.xlsx PANPHARMA=respostas/... NAZARIA=... SBLOG=... TAPAJOS=... -d DD-MM-AAAA
 ```
 

@@ -8,7 +8,8 @@
   distribuidor vira um pedido (pedidos/distribuidores/PEDIDO_<NOME>_<data>.xlsx).
 
 Uso: python pedidos.py <Lista_de_Compra.xlsx> [NOME=resposta ...] [-d dd-mm-aaaa]
-Sem respostas, gera só os pedidos de OL.
+Sem respostas, gera só os pedidos de OL. Itens com pedido em campanha de OL
+(ol_campanha.py, já gerada em pedidos/OL) saem dos pedidos de distribuidor.
 """
 import re
 import sys
@@ -77,7 +78,19 @@ def pedidos_ol(lista, data):
     return resumo
 
 
+def comprados_em_campanha():
+    """Códigos com pedido em campanha de OL (ol_campanha.py): saem dos pedidos de distribuidor."""
+    cods = set()
+    for f in (AQUI / "pedidos" / "OL").glob("OL_*.xlsx"):
+        x = pd.read_excel(f, header=3)
+        if "Qtde pedido (emb.)" in x.columns:
+            cods |= set(x.loc[x["Qtde pedido (emb.)"] > 0, "Cód. Rocha"].dropna().astype(int))
+    return cods
+
+
 def pedidos_distribuidor(prod, nomes, data):
+    camp = comprados_em_campanha()
+    prod = prod[~prod["cod"].isin(camp)]
     pasta = AQUI / "pedidos" / "distribuidores"
     pasta.mkdir(parents=True, exist_ok=True)
     resumo = []
